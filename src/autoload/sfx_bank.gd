@@ -1,0 +1,121 @@
+class_name SfxBank
+## Recorded table sounds by intensity tier. Written by tools/build_sounds.py - don't edit by hand.
+## kind -> [[centre impact speed in m/s, [sample names in assets/audio/table/]], ...] from soft to hard.
+const TIERS := {
+	"ball": [
+		[
+			0.22,
+			[
+				"ball_soft_1",
+				"ball_soft_2",
+				"ball_soft_3",
+				"ball_soft_4",
+				"ball_soft_5",
+				"ball_soft_6"
+			]
+		],
+		[
+			1.1,
+			[
+				"ball_mid_1",
+				"ball_mid_2",
+				"ball_mid_3",
+				"ball_mid_4",
+				"ball_mid_5",
+				"ball_mid_6"
+			]
+		],
+		[
+			3.8,
+			[
+				"ball_hard_1",
+				"ball_hard_2",
+				"ball_hard_3",
+				"ball_hard_4",
+				"ball_hard_5"
+			]
+		]
+	],
+	"cushion": [
+		[
+			0.35,
+			[
+				"cushion_soft_1",
+				"cushion_soft_2",
+				"cushion_soft_3"
+			]
+		],
+		[
+			1.4,
+			[
+				"cushion_mid_1",
+				"cushion_mid_2",
+				"cushion_mid_3"
+			]
+		],
+		[
+			3.6,
+			[
+				"cushion_hard_1",
+				"cushion_hard_2",
+				"cushion_hard_3"
+			]
+		]
+	],
+	"cue": [
+		[
+			1.0,
+			[
+				"cue_soft_1",
+				"cue_soft_2",
+				"cue_soft_3",
+				"cue_soft_4"
+			]
+		],
+		[
+			3.2,
+			[
+				"cue_mid_1",
+				"cue_mid_2",
+				"cue_mid_3",
+				"cue_mid_4"
+			]
+		],
+		[
+			6.5,
+			[
+				"cue_hard_1",
+				"cue_hard_2",
+				"cue_hard_3",
+				"cue_hard_4"
+			]
+		]
+	],
+	"pocket": [
+		[
+			1.0,
+			[
+				"pocket_drop_1"
+			]
+		]
+	],
+	"pocket_roll": [
+		[
+			1.0,
+			[
+				"pocket_roll_roll_1"
+			]
+		]
+	],
+	"bed": [
+		[
+			1.0,
+			[
+				"bed_1",
+				"bed_2",
+				"bed_3"
+			]
+		]
+	]
+}
+const CREDITS := "Pool And Billiards SFX by Suraj Kispotta (CC0 1.0, https://papapleygames.itch.io/pool-and-billiards)"

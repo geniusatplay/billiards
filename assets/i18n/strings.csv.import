@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://c3j87go0svnvh"
+
+[deps]
+
+files=["res://assets/i18n/strings.en.translation", "res://assets/i18n/strings.es.translation", "res://assets/i18n/strings.fr.translation", "res://assets/i18n/strings.de.translation", "res://assets/i18n/strings.pt.translation", "res://assets/i18n/strings.it.translation", "res://assets/i18n/strings.nl.translation", "res://assets/i18n/strings.sv.translation", "res://assets/i18n/strings.pl.translation", "res://assets/i18n/strings.cs.translation", "res://assets/i18n/strings.ro.translation", "res://assets/i18n/strings.tr.translation", "res://assets/i18n/strings.el.translation", "res://assets/i18n/strings.ru.translation", "res://assets/i18n/strings.uk.translation", "res://assets/i18n/strings.id.translation", "res://assets/i18n/strings.ms.translation", "res://assets/i18n/strings.vi.translation", "res://assets/i18n/strings.th.translation", "res://assets/i18n/strings.ja.translation", "res://assets/i18n/strings.ko.translation", "res://assets/i18n/strings.zh.translation", "res://assets/i18n/strings.zh_TW.translation", "res://assets/i18n/strings.ar.translation", "res://assets/i18n/strings.he.translation", "res://assets/i18n/strings.ur.translation", "res://assets/i18n/strings.hi.translation", "res://assets/i18n/strings.mr.translation", "res://assets/i18n/strings.bn.translation", "res://assets/i18n/strings.pa.translation", "res://assets/i18n/strings.ta.translation", "res://assets/i18n/strings.te.translation"]
+
+source_file="res://assets/i18n/strings.csv"
+dest_files=["res://assets/i18n/strings.en.translation", "res://assets/i18n/strings.es.translation", "res://assets/i18n/strings.fr.translation", "res://assets/i18n/strings.de.translation", "res://assets/i18n/strings.pt.translation", "res://assets/i18n/strings.it.translation", "res://assets/i18n/strings.nl.translation", "res://assets/i18n/strings.sv.translation", "res://assets/i18n/strings.pl.translation", "res://assets/i18n/strings.cs.translation", "res://assets/i18n/strings.ro.translation", "res://assets/i18n/strings.tr.translation", "res://assets/i18n/strings.el.translation", "res://assets/i18n/strings.ru.translation", "res://assets/i18n/strings.uk.translation", "res://assets/i18n/strings.id.translation", "res://assets/i18n/strings.ms.translation", "res://assets/i18n/strings.vi.translation", "res://assets/i18n/strings.th.translation", "res://assets/i18n/strings.ja.translation", "res://assets/i18n/strings.ko.translation", "res://assets/i18n/strings.zh.translation", "res://assets/i18n/strings.zh_TW.translation", "res://assets/i18n/strings.ar.translation", "res://assets/i18n/strings.he.translation", "res://assets/i18n/strings.ur.translation", "res://assets/i18n/strings.hi.translation", "res://assets/i18n/strings.mr.translation", "res://assets/i18n/strings.bn.translation", "res://assets/i18n/strings.pa.translation", "res://assets/i18n/strings.ta.translation", "res://assets/i18n/strings.te.translation"]
+
+[params]
+
+compress=0
+delimiter=0
+unescape_keys=false
+unescape_translations=true

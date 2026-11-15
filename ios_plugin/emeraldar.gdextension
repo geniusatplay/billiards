@@ -1,0 +1,23 @@
+; Walk-around AR on iPhone / iPad (Apple ARKit). Only iPhone builds use this: the cloud build copies it to
+; res://addons/emeraldar/ together with the two libraries (Android and desktop builds never see it, so they
+; don't complain about a missing library). The singleton it registers, "EmeraldAR", has the same methods
+; as the Android plugin of the same name.
+
+[configuration]
+
+entry_symbol = "emeraldar_init"
+compatibility_minimum = "4.5"
+
+[libraries]
+
+ios.release = "res://addons/emeraldar/bin/libemeraldar.ios.template_release.xcframework"
+ios.debug = "res://addons/emeraldar/bin/libemeraldar.ios.template_release.xcframework"
+
+[dependencies]
+
+ios.release = {
+  "res://addons/emeraldar/bin/libgodot-cpp.ios.template_release.xcframework": ""
+}
+ios.debug = {
+  "res://addons/emeraldar/bin/libgodot-cpp.ios.template_release.xcframework": ""
+}

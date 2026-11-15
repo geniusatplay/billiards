@@ -1,0 +1,75 @@
+name: iPhone build
+
+# Builds Emerald Break for iPhone / iPad on a GitHub Mac: the ARKit plugin, the Godot export, the Xcode build.
+# The result is an unsigned .ipa, published as the "ios-latest" release, for installing with Sideloadly.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 75
+    env:
+      GODOT_VERSION: "4.7.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode and SCons
+        run: |
+          xcodebuild -version
+          python3 -m pip install --user --break-system-packages scons || brew install scons
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      - name: godot-cpp (cached between builds)
+        uses: actions/cache@v4
+        with:
+          path: ios_plugin/godot-cpp
+          key: godot-cpp-4.5-ios-arm64-min15-v1
+
+      - name: Build the ARKit plugin
+        run: bash ios_plugin/ci.sh plugin
+
+      - name: Godot 4.7.2 + iOS template (cached between builds)
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-macos-ios-template-v1
+
+      - name: Get Godot
+        run: bash ios_plugin/ci.sh godot
+
+      - name: Export the Xcode project
+        run: bash ios_plugin/ci.sh export
+
+      - name: Build the app (unsigned .ipa)
+        run: bash ios_plugin/ci.sh ipa
+
+      - name: Keep the Xcode log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/ios/xcodebuild.log
+          if-no-files-found: ignore
+
+      - name: Publish as the "ios-latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IPA=$(ls build/ios/EmeraldBreak-*.ipa)
+          VER=$(basename "$IPA" .ipa | sed 's/EmeraldBreak-//')
+          cp "$IPA" build/ios/EmeraldBreak.ipa
+          gh release delete ios-latest --yes --cleanup-tag || true
+          gh release create ios-latest "$IPA" build/ios/EmeraldBreak.ipa \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Emerald Break $VER for iPhone (unsigned, for Sideloadly)" \
+            --notes "Built from ${GITHUB_SHA::7}. Install with Sideloadly: drag EmeraldBreak.ipa in, sign in with your Apple ID, Start. With a free Apple ID the app runs for 7 days, then install it again."

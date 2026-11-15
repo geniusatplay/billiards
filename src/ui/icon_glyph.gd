@@ -1,0 +1,218 @@
+class_name IconGlyph
+extends Control
+## Resolution-independent vector icons drawn with canvas primitives.
+
+@export var icon := "gear"
+@export var color := Color.WHITE
+var line_w := 0.0
+
+
+static func make(p_icon: String, p_size := 48.0, p_color := Color.WHITE) -> IconGlyph:
+	var g := IconGlyph.new()
+	g.icon = p_icon
+	g.color = p_color
+	g.custom_minimum_size = Vector2(p_size, p_size)
+	g.size = Vector2(p_size, p_size)
+	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return g
+
+
+func set_icon(p_icon: String) -> void:
+	icon = p_icon
+	queue_redraw()
+
+
+func _draw() -> void:
+	var s := minf(size.x, size.y)
+	var o := (size - Vector2(s, s)) * 0.5
+	var w := line_w if line_w > 0.0 else maxf(2.0, s * 0.085)
+	var c := color
+	var P := func(x: float, y: float) -> Vector2: return o + Vector2(x, y) * s
+	match icon:
+		"gear":
+			var cen: Vector2 = P.call(0.5, 0.5)
+			var pts := PackedVector2Array()
+			for i in 48:
+				var a := TAU * i / 48.0
+				var tooth := 1.0 if (i / 3) % 2 == 0 else 0.78
+				pts.append(cen + Vector2(cos(a), sin(a)) * s * 0.42 * tooth)
+			pts.append(pts[0])
+			draw_polyline(pts, c, w * 0.8, true)
+			draw_arc(cen, s * 0.14, 0, TAU, 24, c, w, true)
+		"pause":
+			draw_rect(Rect2(P.call(0.28, 0.2), Vector2(s * 0.14, s * 0.6)), c)
+			draw_rect(Rect2(P.call(0.58, 0.2), Vector2(s * 0.14, s * 0.6)), c)
+		"play":
+			draw_colored_polygon(PackedVector2Array([P.call(0.3, 0.18), P.call(0.82, 0.5), P.call(0.3, 0.82)]), c)
+		"back", "chev_left":
+			draw_polyline(PackedVector2Array([P.call(0.62, 0.18), P.call(0.3, 0.5), P.call(0.62, 0.82)]), c, w * 1.2, true)
+		"chev_right":
+			draw_polyline(PackedVector2Array([P.call(0.38, 0.18), P.call(0.7, 0.5), P.call(0.38, 0.82)]), c, w * 1.2, true)
+		"chev_up":
+			draw_polyline(PackedVector2Array([P.call(0.18, 0.62), P.call(0.5, 0.3), P.call(0.82, 0.62)]), c, w * 1.2, true)
+		"chev_down":
+			draw_polyline(PackedVector2Array([P.call(0.18, 0.38), P.call(0.5, 0.7), P.call(0.82, 0.38)]), c, w * 1.2, true)
+		"plus", "minus":
+			# a magnifier with + or -: zoom in / out
+			draw_arc(P.call(0.42, 0.42), s * 0.27, 0, TAU, 28, c, w, true)
+			draw_line(P.call(0.62, 0.62), P.call(0.88, 0.88), c, w * 1.4, true)
+			draw_line(P.call(0.3, 0.42), P.call(0.54, 0.42), c, w, true)
+			if icon == "plus":
+				draw_line(P.call(0.42, 0.3), P.call(0.42, 0.54), c, w, true)
+		"close":
+			draw_line(P.call(0.22, 0.22), P.call(0.78, 0.78), c, w * 1.2, true)
+			draw_line(P.call(0.78, 0.22), P.call(0.22, 0.78), c, w * 1.2, true)
+		"check":
+			draw_polyline(PackedVector2Array([P.call(0.18, 0.52), P.call(0.42, 0.76), P.call(0.84, 0.26)]), c, w * 1.3, true)
+		"camera":
+			draw_rect(Rect2(P.call(0.1, 0.3), Vector2(s * 0.8, s * 0.52)), c, false, w)
+			draw_rect(Rect2(P.call(0.34, 0.2), Vector2(s * 0.3, s * 0.1)), c)
+			draw_arc(P.call(0.5, 0.56), s * 0.15, 0, TAU, 24, c, w, true)
+		"cube", "studio":
+			var pts2 := PackedVector2Array([P.call(0.5, 0.12), P.call(0.86, 0.32), P.call(0.86, 0.7), P.call(0.5, 0.9), P.call(0.14, 0.7), P.call(0.14, 0.32), P.call(0.5, 0.12)])
+			draw_polyline(pts2, c, w, true)
+			draw_polyline(PackedVector2Array([P.call(0.14, 0.32), P.call(0.5, 0.52), P.call(0.86, 0.32)]), c, w, true)
+			draw_line(P.call(0.5, 0.52), P.call(0.5, 0.9), c, w, true)
+		"eye":
+			var e1 := PackedVector2Array()
+			for i in 25:
+				var tt := float(i) / 24.0
+				e1.append(P.call(0.08 + 0.84 * tt, 0.5 - 0.3 * sin(PI * tt)))
+			for i in 25:
+				var tt := float(i) / 24.0
+				e1.append(P.call(0.92 - 0.84 * tt, 0.5 + 0.3 * sin(PI * tt)))
+			draw_polyline(e1, c, w, true)
+			draw_circle(P.call(0.5, 0.5), s * 0.12, c)
+		"target", "aim_cam":
+			draw_arc(P.call(0.5, 0.5), s * 0.36, 0, TAU, 32, c, w, true)
+			draw_circle(P.call(0.5, 0.5), s * 0.08, c)
+			for d in [Vector2(0, -1), Vector2(0, 1), Vector2(-1, 0), Vector2(1, 0)]:
+				draw_line(P.call(0.5, 0.5) + d * s * 0.22, P.call(0.5, 0.5) + d * s * 0.48, c, w, true)
+		"top_view":
+			draw_rect(Rect2(P.call(0.12, 0.26), Vector2(s * 0.76, s * 0.48)), c, false, w)
+			for q in [Vector2(0.12, 0.26), Vector2(0.88, 0.26), Vector2(0.12, 0.74), Vector2(0.88, 0.74), Vector2(0.5, 0.26), Vector2(0.5, 0.74)]:
+				draw_circle(P.call(q.x, q.y), s * 0.06, c)
+		"refresh", "recenter":
+			draw_arc(P.call(0.5, 0.52), s * 0.32, deg_to_rad(-60), deg_to_rad(250), 32, c, w, true)
+			var tip: Vector2 = P.call(0.5, 0.52) + Vector2(cos(deg_to_rad(-60)), sin(deg_to_rad(-60))) * s * 0.32
+			draw_colored_polygon(PackedVector2Array([tip + Vector2(-s * 0.14, -s * 0.05), tip + Vector2(s * 0.06, s * 0.14), tip + Vector2(s * 0.08, -s * 0.12)]), c)
+		"undo":
+			draw_arc(P.call(0.52, 0.56), s * 0.3, deg_to_rad(200), deg_to_rad(400), 28, c, w, true)
+			var t0: Vector2 = P.call(0.52, 0.56) + Vector2(cos(deg_to_rad(200)), sin(deg_to_rad(200))) * s * 0.3
+			draw_colored_polygon(PackedVector2Array([t0 + Vector2(-s * 0.12, -s * 0.06), t0 + Vector2(s * 0.1, -s * 0.12), t0 + Vector2(s * 0.02, s * 0.12)]), c)
+		"star", "star_empty":
+			var sp := PackedVector2Array()
+			for i in 10:
+				var a := -PI / 2 + TAU * i / 10.0
+				var r := 0.46 if i % 2 == 0 else 0.2
+				sp.append(P.call(0.5 + cos(a) * r, 0.53 + sin(a) * r))
+			if icon == "star":
+				draw_colored_polygon(sp, c)
+			else:
+				sp.append(sp[0])
+				draw_polyline(sp, c, w * 0.8, true)
+		"lock":
+			draw_rect(Rect2(P.call(0.2, 0.44), Vector2(s * 0.6, s * 0.44)), c)
+			draw_arc(P.call(0.5, 0.44), s * 0.2, PI, TAU, 16, c, w * 1.2, true)
+		"help":
+			draw_arc(P.call(0.5, 0.36), s * 0.18, deg_to_rad(180), deg_to_rad(400), 20, c, w * 1.1, true)
+			draw_line(P.call(0.5, 0.54), P.call(0.5, 0.64), c, w * 1.1, true)
+			draw_circle(P.call(0.5, 0.82), s * 0.06, c)
+		"sliders", "debug":
+			for i in 3:
+				var y := 0.24 + i * 0.26
+				draw_line(P.call(0.12, y), P.call(0.88, y), c, w, true)
+				var kx: float = [0.32, 0.66, 0.46][i]
+				draw_circle(P.call(kx, y), s * 0.09, c)
+		"trophy":
+			draw_arc(P.call(0.5, 0.28), s * 0.26, 0, PI, 16, c, w * 1.2, true)
+			draw_line(P.call(0.24, 0.28), P.call(0.76, 0.28), c, w * 1.2, true)
+			draw_line(P.call(0.5, 0.54), P.call(0.5, 0.74), c, w * 1.2, true)
+			draw_rect(Rect2(P.call(0.3, 0.74), Vector2(s * 0.4, s * 0.1)), c)
+		"globe":
+			var gc: Vector2 = P.call(0.5, 0.5)
+			draw_arc(gc, s * 0.4, 0, TAU, 40, c, w, true)
+			draw_line(P.call(0.1, 0.5), P.call(0.9, 0.5), c, w * 0.8, true)
+			draw_line(P.call(0.5, 0.1), P.call(0.5, 0.9), c, w * 0.8, true)
+			var mer := PackedVector2Array()
+			var mer2 := PackedVector2Array()
+			for i in 25:
+				var a := -PI * 0.5 + PI * i / 24.0
+				mer.append(gc + Vector2(cos(a) * s * 0.2, sin(a) * s * 0.4))
+				mer2.append(gc + Vector2(-cos(a) * s * 0.2, sin(a) * s * 0.4))
+			draw_polyline(mer, c, w * 0.8, true)
+			draw_polyline(mer2, c, w * 0.8, true)
+		"user":
+			draw_circle(P.call(0.5, 0.32), s * 0.16, c)
+			draw_arc(P.call(0.5, 0.92), s * 0.36, PI, TAU, 20, c, w * 1.4, true)
+		"users":
+			draw_circle(P.call(0.36, 0.34), s * 0.13, c)
+			draw_arc(P.call(0.36, 0.9), s * 0.28, PI, TAU, 16, c, w * 1.2, true)
+			draw_circle(P.call(0.68, 0.3), s * 0.11, Color(c, 0.75))
+			draw_arc(P.call(0.7, 0.8), s * 0.22, PI, TAU, 16, Color(c, 0.75), w, true)
+		"robot":
+			draw_rect(Rect2(P.call(0.18, 0.3), Vector2(s * 0.64, s * 0.5)), c, false, w)
+			draw_circle(P.call(0.38, 0.52), s * 0.07, c)
+			draw_circle(P.call(0.62, 0.52), s * 0.07, c)
+			draw_line(P.call(0.5, 0.3), P.call(0.5, 0.14), c, w, true)
+			draw_circle(P.call(0.5, 0.12), s * 0.05, c)
+		"ball", "practice":
+			draw_arc(P.call(0.5, 0.5), s * 0.38, 0, TAU, 32, c, w, true)
+			draw_circle(P.call(0.5, 0.5), s * 0.16, c)
+		"levels", "grid":
+			for gx in 2:
+				for gy in 2:
+					draw_rect(Rect2(P.call(0.14 + gx * 0.4, 0.14 + gy * 0.4), Vector2(s * 0.3, s * 0.3)), c, false, w)
+		"hand":
+			draw_rect(Rect2(P.call(0.28, 0.46), Vector2(s * 0.46, s * 0.4)), c, false, w)
+			for i in 4:
+				draw_line(P.call(0.32 + i * 0.12, 0.46), P.call(0.32 + i * 0.12, 0.18 + absf(i - 1.5) * 0.06), c, w, true)
+		"sound":
+			draw_colored_polygon(PackedVector2Array([P.call(0.12, 0.38), P.call(0.3, 0.38), P.call(0.5, 0.2), P.call(0.5, 0.8), P.call(0.3, 0.62), P.call(0.12, 0.62)]), c)
+			draw_arc(P.call(0.52, 0.5), s * 0.18, -0.9, 0.9, 12, c, w, true)
+			draw_arc(P.call(0.52, 0.5), s * 0.32, -0.9, 0.9, 16, c, w, true)
+		"vibrate":
+			draw_rect(Rect2(P.call(0.34, 0.16), Vector2(s * 0.32, s * 0.68)), c, false, w)
+			for sx in [-1.0, 1.0]:
+				draw_polyline(PackedVector2Array([P.call(0.5 + sx * 0.28, 0.3), P.call(0.5 + sx * 0.38, 0.42), P.call(0.5 + sx * 0.28, 0.54), P.call(0.5 + sx * 0.38, 0.66)]), c, w * 0.8, true)
+		"move":
+			draw_line(P.call(0.5, 0.1), P.call(0.5, 0.9), c, w, true)
+			draw_line(P.call(0.1, 0.5), P.call(0.9, 0.5), c, w, true)
+			for d in [Vector2(0, -1), Vector2(0, 1), Vector2(-1, 0), Vector2(1, 0)]:
+				var tipm: Vector2 = P.call(0.5, 0.5) + d * s * 0.42
+				var side := Vector2(-d.y, d.x) * s * 0.1
+				draw_colored_polygon(PackedVector2Array([tipm + d * s * 0.06, tipm - d * s * 0.1 + side, tipm - d * s * 0.1 - side]), c)
+		"home":
+			draw_polyline(PackedVector2Array([P.call(0.12, 0.5), P.call(0.5, 0.16), P.call(0.88, 0.5)]), c, w * 1.1, true)
+			draw_polyline(PackedVector2Array([P.call(0.24, 0.42), P.call(0.24, 0.86), P.call(0.76, 0.86), P.call(0.76, 0.42)]), c, w, true)
+		"kit":
+			# a small table with a ball on it and a cue: "your cue, table and balls"
+			draw_rect(Rect2(P.call(0.1, 0.56), Vector2(s * 0.8, s * 0.26)), c, false, w)
+			draw_line(P.call(0.18, 0.82), P.call(0.18, 0.92), c, w, true)
+			draw_line(P.call(0.82, 0.82), P.call(0.82, 0.92), c, w, true)
+			draw_circle(P.call(0.38, 0.47), s * 0.09, c)
+			draw_line(P.call(0.52, 0.42), P.call(0.92, 0.1), c, w * 1.2, true)
+		"gift":
+			draw_rect(Rect2(P.call(0.14, 0.44), Vector2(s * 0.72, s * 0.44)), c, false, w)
+			draw_rect(Rect2(P.call(0.08, 0.28), Vector2(s * 0.84, s * 0.16)), c, false, w)
+			draw_line(P.call(0.5, 0.28), P.call(0.5, 0.88), c, w, true)
+			draw_arc(P.call(0.38, 0.2), s * 0.11, 0, TAU, 14, c, w * 0.9, true)
+			draw_arc(P.call(0.62, 0.2), s * 0.11, 0, TAU, 14, c, w * 0.9, true)
+		"gem":
+			draw_colored_polygon(PackedVector2Array([P.call(0.28, 0.2), P.call(0.72, 0.2), P.call(0.9, 0.4), P.call(0.5, 0.88), P.call(0.1, 0.4)]), c)
+			draw_polyline(PackedVector2Array([P.call(0.1, 0.4), P.call(0.9, 0.4)]), Color(0, 0, 0, 0.35), w * 0.6, true)
+		"clock":
+			draw_arc(P.call(0.5, 0.5), s * 0.38, 0, TAU, 32, c, w, true)
+			draw_line(P.call(0.5, 0.5), P.call(0.5, 0.26), c, w, true)
+			draw_line(P.call(0.5, 0.5), P.call(0.68, 0.58), c, w, true)
+		"flag":
+			draw_line(P.call(0.24, 0.12), P.call(0.24, 0.9), c, w, true)
+			draw_colored_polygon(PackedVector2Array([P.call(0.24, 0.14), P.call(0.82, 0.3), P.call(0.24, 0.5)]), c)
+		"cue":
+			draw_line(P.call(0.12, 0.88), P.call(0.74, 0.26), c, w * 1.3, true)
+			draw_circle(P.call(0.84, 0.16), s * 0.1, c)
+		"spin":
+			draw_arc(P.call(0.5, 0.5), s * 0.38, 0, TAU, 32, c, w, true)
+			draw_circle(P.call(0.6, 0.36), s * 0.08, c)
+		_:
+			draw_arc(P.call(0.5, 0.5), s * 0.36, 0, TAU, 24, c, w, true)

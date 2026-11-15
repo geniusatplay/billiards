@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+# Builds the EmeraldAR GDExtension for iPhone / iPad as a static library, the way godot-cpp's own iOS
+# example does (Godot's iOS export links it into the app and calls emeraldar_init at start-up).
+#
+#   cd ios_plugin && scons platform=ios arch=arm64 target=template_release ios_min_version=15.0
+#
+# Needs godot-cpp (branch 4.5) in ios_plugin/godot-cpp; build_ios.sh fetches it.
+
+env = SConscript("godot-cpp/SConstruct")
+env = env.Clone()  # our flags must not leak into godot-cpp's own build
+env.Append(CPPPATH=["src/"])
+# Objective-C++ with ARC. Modules make the object file name the frameworks it uses (ARKit, AVFoundation,
+# CoreVideo, UIKit), so the app links them without a hand-made list - Godot builds its own iOS code the same way.
+env.Append(CCFLAGS=["-fobjc-arc", "-fmodules", "-fcxx-modules"])
+
+library = env.StaticLibrary(
+    "bin/libemeraldar.{}.{}.a".format(env["platform"], env["target"]),
+    source=Glob("src/*.mm"),
+)
+env.NoCache(library)
+Default(library)

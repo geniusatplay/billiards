@@ -1,0 +1,17 @@
+# Godot
+.godot/
+*.translation
+/build/
+/addons/emeraldar/
+
+# iPhone plugin build products (made on the build Mac)
+/ios_plugin/godot-cpp/
+/ios_plugin/bin/
+*.os
+*.o
+*.a
+.sconsign*.dblite
+
+# OS
+.DS_Store
+Thumbs.db

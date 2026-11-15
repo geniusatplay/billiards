@@ -1,0 +1,4 @@
+Table sounds built by tools/build_sounds.py from:
+  Pool And Billiards SFX by Suraj Kispotta (CC0 1.0, https://papapleygames.itch.io/pool-and-billiards)
+Source files used: ball_collide_ball_1.wav, ball_collide_ball_2.wav, ball_collide_ball_3.wav, ball_collide_ball_4.wav, ball_collide_ball_5.wav, ball_collide_ball_6.wav, ball_collide_wall_1.wav, ball_collide_wall_2.wav, ball_collide_wall_3.wav, ball_dropped_in_hole.wav, ball_roll_in_hole.wav, ball_shoot_1.wav, ball_shoot_2.wav, ball_shoot_3.wav, ball_shoot_4.wav
+roll_loop.wav is synthesized by the script.
