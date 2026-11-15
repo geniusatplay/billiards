@@ -16,16 +16,21 @@ concurrency:
 
 jobs:
   ios:
-    runs-on: macos-15
+    # Godot 4.7.2's iOS engine library is built with Xcode 26 (iOS 26 SDK), so the app must be linked with it too
+    runs-on: macos-26
     timeout-minutes: 75
     env:
       GODOT_VERSION: "4.7.2"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Xcode and SCons
+      - name: Xcode 26 and SCons
         run: |
+          ls -d /Applications/Xcode*.app
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X/Contents/Developer"; fi
           xcodebuild -version
+          xcodebuild -version | grep -q "^Xcode 26" || { echo "Godot 4.7.2 needs Xcode 26 to link the app"; exit 1; }
           python3 -m pip install --user --break-system-packages scons || brew install scons
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
 
@@ -33,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios_plugin/godot-cpp
-          key: godot-cpp-4.5-ios-arm64-min15-v1
+          key: godot-cpp-4.5-ios-arm64-min15-xcode26-v1
 
       - name: Build the ARKit plugin
         run: bash ios_plugin/ci.sh plugin
