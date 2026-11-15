@@ -31,12 +31,19 @@ step_plugin() {
 	fi
 	say "building godot-cpp + the EmeraldAR plugin for iOS arm64 (min iOS $MIN_IOS), for phones and for the simulator"
 	scons platform=ios arch=arm64 target=template_release ios_min_version="$MIN_IOS" -j"$(sysctl -n hw.ncpu)"
+	# simulator: Godot 4.7.2's simulator engine library is x86_64 only, so the simulator app is x86_64 (Rosetta);
+	# arm64 is built too, so the slice fits whichever simulator architecture a later Godot ships
 	scons platform=ios arch=arm64 ios_simulator=yes target=template_release ios_min_version="$MIN_IOS" -j"$(sysctl -n hw.ncpu)"
+	scons platform=ios arch=x86_64 ios_simulator=yes target=template_release ios_min_version="$MIN_IOS" -j"$(sysctl -n hw.ncpu)"
 	local lib="bin/libemeraldar.ios.template_release.arm64.a"
-	local lib_sim="bin/libemeraldar.ios.template_release.arm64.simulator.a"
 	local cpp="godot-cpp/bin/libgodot-cpp.ios.template_release.arm64.a"
-	local cpp_sim="godot-cpp/bin/libgodot-cpp.ios.template_release.arm64.simulator.a"
+	mkdir -p bin/sim
+	local lib_sim="bin/sim/libemeraldar.ios.template_release.simulator.a"
+	local cpp_sim="bin/sim/libgodot-cpp.ios.template_release.simulator.a"
+	lipo -create bin/libemeraldar.ios.template_release.arm64.simulator.a bin/libemeraldar.ios.template_release.x86_64.simulator.a -output "$lib_sim"
+	lipo -create godot-cpp/bin/libgodot-cpp.ios.template_release.arm64.simulator.a godot-cpp/bin/libgodot-cpp.ios.template_release.x86_64.simulator.a -output "$cpp_sim"
 	test -f "$lib" && test -f "$lib_sim" && test -f "$cpp" && test -f "$cpp_sim"
+	lipo -info "$lib_sim" "$cpp_sim"
 	say "frameworks the plugin asks the app to link (from -fmodules)"
 	otool -l "$lib" | grep -A4 LC_LINKER_OPTION | grep string | sort -u || true
 	nm -gU "$lib" | grep -q "_emeraldar_init" && echo "entry point emeraldar_init: present"
@@ -131,10 +138,18 @@ step_sim() {
 	for f in EmeraldBreak.xcframework/*simulator*/*.a libemeraldar*.xcframework/*simulator*/*.a libgodot-cpp*.xcframework/*simulator*/*.a; do
 		[ -f "$f" ] && echo "$f: $(lipo -archs "$f" 2>/dev/null || echo '?')"
 	done
-	say "building for the iOS simulator"
+	# the engine's simulator library is x86_64 only: build an x86_64 simulator app, run through Rosetta
+	if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+		say "installing Rosetta on the build Mac (for the x86_64 simulator app)"
+		sudo softwareupdate --install-rosetta --agree-to-license || true
+	fi
+	local sim_arch
+	sim_arch=$(lipo -archs EmeraldBreak.xcframework/*simulator*/libgodot.a 2>/dev/null | tr ' ' '\n' | grep -m1 -E "arm64|x86_64" || echo x86_64)
+	lipo -archs EmeraldBreak.xcframework/*simulator*/libgodot.a 2>/dev/null | grep -q arm64 && sim_arch=arm64
+	say "building for the iOS simulator ($sim_arch)"
 	set +e
 	xcodebuild -project EmeraldBreak.xcodeproj -scheme EmeraldBreak -configuration Release -sdk iphonesimulator \
-		-destination "generic/platform=iOS Simulator" -derivedDataPath sim_dd ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+		-destination "generic/platform=iOS Simulator" -derivedDataPath sim_dd ARCHS="$sim_arch" ONLY_ACTIVE_ARCH=NO \
 		CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build > sim/xcodebuild_sim.log 2>&1
 	local rc=$?
 	set -e

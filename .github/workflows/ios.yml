@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios_plugin/godot-cpp
-          key: godot-cpp-4.5-ios-arm64-sim-min15-xcode26-v2
+          key: godot-cpp-4.5-ios-arm64-sim2-min15-xcode26-v3
 
       - name: Build the ARKit plugin
         run: bash ios_plugin/ci.sh plugin
