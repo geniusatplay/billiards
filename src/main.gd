@@ -62,6 +62,8 @@ func _ready() -> void:
 	stage.set_idle_spin(true)
 	Sfx.music(true)
 	get_viewport().size_changed.connect(_on_resize)
+	_fit_safe_area()
+	get_tree().create_timer(0.5).timeout.connect(_fit_safe_area)   # iOS knows the final safe area only once shown
 	Loc.language_changed.connect(_on_language_changed)
 	var tour := ""
 	for a in OS.get_cmdline_user_args():
@@ -206,7 +208,25 @@ func _make_loading() -> CanvasLayer:
 
 
 func _on_resize() -> void:
-	pass
+	_fit_safe_area()
+
+
+## iPhone / iPad (v1.1.12): keep the controls clear of the notch / Dynamic Island and the home bar. Only the
+## controls move in: the 3D view and the AR camera picture still fill the whole screen. Other platforms: no change.
+func _fit_safe_area() -> void:
+	if OS.get_name() == "iOS":
+		apply_safe_area(DisplayServer.get_display_safe_area(), DisplayServer.window_get_size())
+
+
+## safe: the part of the screen free of the notch and home bar, in screen pixels; win: the screen size in pixels.
+func apply_safe_area(safe: Rect2i, win: Vector2i) -> void:
+	if ui_root == null or win.x <= 0 or win.y <= 0 or safe.size.x <= 0 or safe.size.y <= 0:
+		return
+	var k := get_viewport().get_visible_rect().size / Vector2(win)   # screen pixels -> UI units
+	ui_root.offset_left = maxf(0.0, safe.position.x) * k.x
+	ui_root.offset_top = maxf(0.0, safe.position.y) * k.y
+	ui_root.offset_right = -maxf(0.0, win.x - safe.end.x) * k.x
+	ui_root.offset_bottom = -maxf(0.0, win.y - safe.end.y) * k.y
 
 
 ## Labels and buttons translate themselves; anything put together in code is rebuilt here.
@@ -883,7 +903,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -1116,6 +1136,40 @@ func _tour_step(dir: String, s: String) -> void:
 					shot_taken = true
 					await _shot(dir, "jump")
 			print("JUMP %s (peak %.1f cm)" % ["PASS" if peak > 0.02 else "FAIL", peak * 100.0])
+		"safe_area":
+			# iPhone (v1.1.12): the controls stay clear of the Dynamic Island and the home bar.
+			# iPhone 15 Pro in landscape: 2556 x 1179 px, 177 px kept free left and right, 63 px at the bottom.
+			var res := []
+			var win := Vector2i(2556, 1179)
+			var safe := Rect2i(177, 0, 2556 - 354, 1179 - 63)
+			apply_safe_area(safe, win)
+			await _wait(0.4)
+			var canvas := get_viewport().get_visible_rect().size
+			var k := canvas / Vector2(win)
+			var free := Rect2(Vector2(safe.position) * k, Vector2(safe.size) * k)
+			var outside := []
+			for b in ui_root.find_children("*", "Button", true, false):
+				var btn := b as Button
+				if btn.is_visible_in_tree() and not free.encloses(btn.get_global_rect().grow(-1.0)):
+					outside.append(btn.text.substr(0, 24))
+			res.append(["menu: every button inside the free area (%d px each side, %d px below)" % [int(177 * k.x), int(63 * k.y)], outside.is_empty(), str(outside)])
+			await _shot(dir, "safe_area_menu")
+			start_match({"mode": "practice"})
+			await _wait(1.5)
+			outside.clear()
+			for b in ui_root.find_children("*", "Button", true, false):
+				var btn := b as Button
+				if btn.is_visible_in_tree() and not free.encloses(btn.get_global_rect().grow(-1.0)):
+					outside.append(btn.text.substr(0, 24))
+			res.append(["match: every HUD button inside the free area", outside.is_empty(), str(outside)])
+			await _shot(dir, "safe_area_match")
+			apply_safe_area(Rect2i(Vector2i.ZERO, win), win)
+			res.append(["no notch -> no margins", is_zero_approx(ui_root.offset_left) and is_zero_approx(ui_root.offset_bottom)])
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s %s" % ["ok  " if r[1] else "FAIL", r[0], "" if r[1] or r.size() < 3 else r[2]])
+			print("SAFE_AREA %s" % ("PASS" if all_ok else "FAIL"))
 		"ar_blocked":
 			# AR is ARCore or nothing. When it can't start the game must say why, offer the fix, retry when the
 			# player comes back, and never fall back to a gyro-only "AR".
