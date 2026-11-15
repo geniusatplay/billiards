@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios_plugin/godot-cpp
-          key: godot-cpp-4.5-ios-arm64-min15-xcode26-v1
+          key: godot-cpp-4.5-ios-arm64-sim-min15-xcode26-v2
 
       - name: Build the ARKit plugin
         run: bash ios_plugin/ci.sh plugin
@@ -78,3 +78,17 @@ jobs:
             --target "$GITHUB_SHA" --prerelease \
             --title "Emerald Break $VER for iPhone (unsigned, for Sideloadly)" \
             --notes "Built from ${GITHUB_SHA::7}. Install with Sideloadly: drag EmeraldBreak.ipa in, sign in with your Apple ID, Start. With a free Apple ID the app runs for 7 days, then install it again."
+
+      - name: Test on an iPhone simulator (plugin, safe area, AR start-up)
+        run: bash ios_plugin/ci.sh sim
+
+      - name: Publish the simulator results as the "ios-sim-check" release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls build/ios/sim/ 2>/dev/null || exit 0
+          gh release delete ios-sim-check --yes --cleanup-tag || true
+          gh release create ios-sim-check build/ios/sim/* --target "$GITHUB_SHA" --prerelease \
+            --title "iPhone simulator check (${GITHUB_SHA::7})" \
+            --notes "Pictures and log of the game's ios_check test on an iPhone simulator. The simulator has no AR camera, so AR stops with the Apple ARKit message there; on a real iPhone the table is placed in the room."

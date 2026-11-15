@@ -6,6 +6,8 @@
 #   ios_plugin/ci.sh godot    fetch Godot 4.7.2 for macOS and its iOS export template (kept in ~/godot)
 #   ios_plugin/ci.sh export   export the game as an Xcode project (build/ios/EmeraldBreak.xcodeproj)
 #   ios_plugin/ci.sh ipa      build it, unsigned, into build/ios/EmeraldBreak-<version>.ipa (for Sideloadly)
+#   ios_plugin/ci.sh sim      run it on an iPhone simulator with a Dynamic Island: the game's "ios_check" test
+#                             (plugin loaded, safe area, AR start-up) -> build/ios/sim/ (pictures + log)
 #
 # The .ipa is unsigned on purpose: Sideloadly (or AltStore, or Xcode) signs it with your own Apple ID when it
 # installs it on the phone.
@@ -27,11 +29,14 @@ step_plugin() {
 		rm -rf godot-cpp
 		git clone --depth 1 --branch 4.5 https://github.com/godotengine/godot-cpp godot-cpp
 	fi
-	say "building godot-cpp + the EmeraldAR plugin for iOS arm64 (min iOS $MIN_IOS)"
+	say "building godot-cpp + the EmeraldAR plugin for iOS arm64 (min iOS $MIN_IOS), for phones and for the simulator"
 	scons platform=ios arch=arm64 target=template_release ios_min_version="$MIN_IOS" -j"$(sysctl -n hw.ncpu)"
-	local lib="bin/libemeraldar.ios.template_release.a"
+	scons platform=ios arch=arm64 ios_simulator=yes target=template_release ios_min_version="$MIN_IOS" -j"$(sysctl -n hw.ncpu)"
+	local lib="bin/libemeraldar.ios.template_release.arm64.a"
+	local lib_sim="bin/libemeraldar.ios.template_release.arm64.simulator.a"
 	local cpp="godot-cpp/bin/libgodot-cpp.ios.template_release.arm64.a"
-	test -f "$lib" && test -f "$cpp"
+	local cpp_sim="godot-cpp/bin/libgodot-cpp.ios.template_release.arm64.simulator.a"
+	test -f "$lib" && test -f "$lib_sim" && test -f "$cpp" && test -f "$cpp_sim"
 	say "frameworks the plugin asks the app to link (from -fmodules)"
 	otool -l "$lib" | grep -A4 LC_LINKER_OPTION | grep string | sort -u || true
 	nm -gU "$lib" | grep -q "_emeraldar_init" && echo "entry point emeraldar_init: present"
@@ -39,8 +44,8 @@ step_plugin() {
 	local out="$ROOT/addons/emeraldar"
 	rm -rf "$out"
 	mkdir -p "$out/bin"
-	xcodebuild -create-xcframework -library "$lib" -output "$out/bin/libemeraldar.ios.template_release.xcframework"
-	xcodebuild -create-xcframework -library "$cpp" -output "$out/bin/libgodot-cpp.ios.template_release.xcframework"
+	xcodebuild -create-xcframework -library "$lib" -library "$lib_sim" -output "$out/bin/libemeraldar.ios.template_release.xcframework"
+	xcodebuild -create-xcframework -library "$cpp" -library "$cpp_sim" -output "$out/bin/libgodot-cpp.ios.template_release.xcframework"
 	cp emeraldar.gdextension "$out/"
 	ls -la "$out" "$out/bin"
 }
@@ -116,11 +121,68 @@ step_ipa() {
 	shasum -a 256 "$ipa"
 }
 
+step_sim() {
+	cd "$ROOT/build/ios"
+	local bundle="com.emeraldvortexgames.emeraldbreak"
+	say "building for the iOS simulator"
+	set +e
+	xcodebuild -project EmeraldBreak.xcodeproj -scheme EmeraldBreak -configuration Release -sdk iphonesimulator \
+		-destination "generic/platform=iOS Simulator" -derivedDataPath sim_dd ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+		CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build > xcodebuild_sim.log 2>&1
+	local rc=$?
+	set -e
+	if [ $rc -ne 0 ]; then
+		grep -E "error:|Undefined symbols|ld: |\*\* BUILD FAILED" xcodebuild_sim.log | head -n 60
+		tail -n 30 xcodebuild_sim.log
+		exit $rc
+	fi
+	local app
+	app=$(find sim_dd/Build/Products -maxdepth 2 -name "EmeraldBreak.app" | head -n 1)
+	test -d "$app"
+	say "an iPhone simulator with a Dynamic Island"
+	local udid
+	udid=$(xcrun simctl list devices available -j | python3 -c '
+import json, sys
+devs = [d for rt, ds in json.load(sys.stdin)["devices"].items() if "iOS" in rt for d in ds]
+for want in ("iPhone 17 Pro", "iPhone 16 Pro", "Pro", "iPhone"):
+    hit = [d for d in devs if want in d["name"]]
+    if hit:
+        print(hit[-1]["udid"]); break')
+	test -n "$udid"
+	xcrun simctl list devices | grep "$udid"
+	xcrun simctl boot "$udid" || true
+	xcrun simctl bootstatus "$udid" -b
+	xcrun simctl install "$udid" "$app"
+	rm -rf sim
+	mkdir -p sim
+	xcrun simctl spawn "$udid" log stream --level info --style compact --predicate 'process == "EmeraldBreak"' > sim/godot.log 2>&1 &
+	local logger=$!
+	sleep 2
+	say "running the game's ios_check test"
+	xcrun simctl launch "$udid" "$bundle" -- --tour=user://tour --only=ios_check
+	local i
+	for i in $(seq 1 150); do
+		grep -q "TOUR done" sim/godot.log && break
+		sleep 2
+	done
+	sleep 2
+	xcrun simctl io "$udid" screenshot sim/screen.png || true
+	local data
+	data=$(xcrun simctl get_app_container "$udid" "$bundle" data)
+	find "$data" -name "ios_*.png" -exec cp {} sim/ \;
+	kill "$logger" 2>/dev/null || true
+	xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
+	ls -la sim
+	grep -E "\[ios\]|\[ar\]|EmeraldAR|  ok|  FAIL|IOS_CHECK|SCRIPT ERROR|GDExtension" sim/godot.log | cut -c1-300 | head -n 60
+	grep -q "IOS_CHECK PASS" sim/godot.log
+}
+
 case "${1:-}" in
 	plugin) step_plugin ;;
 	godot) step_godot ;;
 	export) step_export ;;
 	ipa) step_ipa ;;
+	sim) step_sim ;;
 	all) step_plugin; step_godot; step_export; step_ipa ;;
 	*) echo "usage: $0 plugin|godot|export|ipa|all"; exit 2 ;;
 esac

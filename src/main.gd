@@ -903,12 +903,12 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
-		if only == "" and s == "perf":
-			continue     # (measuring only: --only=perf)
+		if only == "" and s in ["perf", "ios_check"]:
+			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator)
 		await _tour_step(dir, s)
 	print("TOUR done")
 	get_tree().quit()
@@ -1136,6 +1136,40 @@ func _tour_step(dir: String, s: String) -> void:
 					shot_taken = true
 					await _shot(dir, "jump")
 			print("JUMP %s (peak %.1f cm)" % ["PASS" if peak > 0.02 else "FAIL", peak * 100.0])
+		"ios_check":
+			# Run on an iPhone or the iOS simulator (the cloud build does: ios_plugin/ci.sh sim): the real ARKit
+			# plugin and the real notch. --only=ios_check
+			var res := []
+			var has := Engine.has_singleton("EmeraldAR")
+			res.append(["EmeraldAR plugin loaded (the ARKit GDExtension)", has])
+			var avail := "none"
+			if has:
+				var p: Object = Engine.get_singleton("EmeraldAR")
+				avail = str(p.call("availability"))
+				var st: PackedFloat32Array = p.call("getState")
+				print("[ios] availability: %s | %s" % [avail, p.call("getInfo")])
+				res.append(["getState() gives the 40 numbers of the Android plugin", st.size() == 40])
+			res.append(["on iOS with the plugin, a match starts in walk-around AR", stage.auto_mode() == Stage.Mode.WORLD_AR])
+			var win := DisplayServer.window_get_size()
+			var safe := DisplayServer.get_display_safe_area()
+			print("[ios] screen %s, safe area %s, controls inset L%.0f T%.0f R%.0f B%.0f" % [win, safe,
+				ui_root.offset_left, ui_root.offset_top, -ui_root.offset_right, -ui_root.offset_bottom])
+			res.append(["controls kept inside the safe area", safe.size == win or ui_root.offset_left > 0.0 or ui_root.offset_bottom < 0.0])
+			await _shot(dir, "ios_menu")
+			start_match({"mode": "practice"})
+			await _wait(4.0)
+			print("[ios] AR state %d, reason '%s': %s" % [stage.ar_state, stage.ar_block, stage.ar_block_text()])
+			if avail == "unsupported":
+				# the simulator (or a very old device): no world tracking -> the ARKit message and Play without AR
+				res.append(["no world tracking here -> AR blocked with the Apple ARKit message", stage.ar_state == Stage.ArState.BLOCKED and stage.ar_block_text().contains("Apple ARKit")])
+			else:
+				res.append(["AR starting, waiting for the camera answer, or running", stage.ar_state in [Stage.ArState.STARTING, Stage.ArState.RUNNING]])
+			await _shot(dir, "ios_practice")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("IOS_CHECK %s" % ("PASS" if all_ok else "FAIL"))
 		"safe_area":
 			# iPhone (v1.1.12): the controls stay clear of the Dynamic Island and the home bar.
 			# iPhone 15 Pro in landscape: 2556 x 1179 px, 177 px kept free left and right, 63 px at the bottom.

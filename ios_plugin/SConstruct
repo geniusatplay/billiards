@@ -3,6 +3,7 @@
 # example does (Godot's iOS export links it into the app and calls emeraldar_init at start-up).
 #
 #   cd ios_plugin && scons platform=ios arch=arm64 target=template_release ios_min_version=15.0
+#   (add ios_simulator=yes for the iOS simulator; ci.sh builds both and packs them into one xcframework)
 #
 # Needs godot-cpp (branch 4.5) in ios_plugin/godot-cpp; build_ios.sh fetches it.
 
@@ -14,7 +15,7 @@ env.Append(CPPPATH=["src/"])
 env.Append(CCFLAGS=["-fobjc-arc", "-fmodules", "-fcxx-modules"])
 
 library = env.StaticLibrary(
-    "bin/libemeraldar.{}.{}.a".format(env["platform"], env["target"]),
+    "bin/libemeraldar{}.a".format(env["suffix"]),   # e.g. .ios.template_release.arm64(.simulator)
     source=Glob("src/*.mm"),
 )
 env.NoCache(library)
