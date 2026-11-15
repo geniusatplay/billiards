@@ -124,16 +124,23 @@ step_ipa() {
 step_sim() {
 	cd "$ROOT/build/ios"
 	local bundle="com.emeraldvortexgames.emeraldbreak"
+	rm -rf sim
+	mkdir -p sim
+	say "libraries for the simulator (architectures)"
+	local f
+	for f in EmeraldBreak.xcframework/*simulator*/*.a libemeraldar*.xcframework/*simulator*/*.a libgodot-cpp*.xcframework/*simulator*/*.a; do
+		[ -f "$f" ] && echo "$f: $(lipo -archs "$f" 2>/dev/null || echo '?')"
+	done
 	say "building for the iOS simulator"
 	set +e
 	xcodebuild -project EmeraldBreak.xcodeproj -scheme EmeraldBreak -configuration Release -sdk iphonesimulator \
 		-destination "generic/platform=iOS Simulator" -derivedDataPath sim_dd ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
-		CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build > xcodebuild_sim.log 2>&1
+		CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build > sim/xcodebuild_sim.log 2>&1
 	local rc=$?
 	set -e
 	if [ $rc -ne 0 ]; then
-		grep -E "error:|Undefined symbols|ld: |\*\* BUILD FAILED" xcodebuild_sim.log | head -n 60
-		tail -n 30 xcodebuild_sim.log
+		{ grep -v "ld: warning: ignoring file" sim/xcodebuild_sim.log | grep -E "error|Undefined|referenced from|ld: |BUILD FAILED" | head -n 80; } || true
+		{ grep -v "ld: warning: ignoring file" sim/xcodebuild_sim.log | tail -n 40; } || true
 		exit $rc
 	fi
 	local app
@@ -153,8 +160,6 @@ for want in ("iPhone 17 Pro", "iPhone 16 Pro", "Pro", "iPhone"):
 	xcrun simctl boot "$udid" || true
 	xcrun simctl bootstatus "$udid" -b
 	xcrun simctl install "$udid" "$app"
-	rm -rf sim
-	mkdir -p sim
 	xcrun simctl spawn "$udid" log stream --level info --style compact --predicate 'process == "EmeraldBreak"' > sim/godot.log 2>&1 &
 	local logger=$!
 	sleep 2
