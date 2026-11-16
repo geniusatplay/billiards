@@ -1138,7 +1138,7 @@ func _tour_step(dir: String, s: String) -> void:
 			print("JUMP %s (peak %.1f cm)" % ["PASS" if peak > 0.02 else "FAIL", peak * 100.0])
 		"ios_check":
 			# Run on an iPhone or the iOS simulator (the cloud build does: ios_plugin/ci.sh sim): the real ARKit
-			# plugin and the real notch. --only=ios_check
+			# plugin and the real notch. --only=ios_check. Results are printed before the picture is taken.
 			var res := []
 			var has := Engine.has_singleton("EmeraldAR")
 			res.append(["EmeraldAR plugin loaded (the ARKit GDExtension)", has])
@@ -1155,7 +1155,8 @@ func _tour_step(dir: String, s: String) -> void:
 			print("[ios] screen %s, safe area %s, controls inset L%.0f T%.0f R%.0f B%.0f" % [win, safe,
 				ui_root.offset_left, ui_root.offset_top, -ui_root.offset_right, -ui_root.offset_bottom])
 			res.append(["controls kept inside the safe area", safe.size == win or ui_root.offset_left > 0.0 or ui_root.offset_bottom < 0.0])
-			await _shot(dir, "ios_menu")
+			for r in res:   # the quick part, before anything heavy is drawn (a simulator without a GPU is slow)
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			start_match({"mode": "practice"})
 			await _wait(4.0)
 			print("[ios] AR state %d, reason '%s': %s" % [stage.ar_state, stage.ar_block, stage.ar_block_text()])
@@ -1164,12 +1165,12 @@ func _tour_step(dir: String, s: String) -> void:
 				res.append(["no world tracking here -> AR blocked with the Apple ARKit message", stage.ar_state == Stage.ArState.BLOCKED and stage.ar_block_text().contains("Apple ARKit")])
 			else:
 				res.append(["AR starting, waiting for the camera answer, or running", stage.ar_state in [Stage.ArState.STARTING, Stage.ArState.RUNNING]])
-			await _shot(dir, "ios_practice")
+			print("  %s  %s" % ["ok  " if res[-1][1] else "FAIL", res[-1][0]])
 			var all_ok := true
 			for r in res:
 				all_ok = all_ok and r[1]
-				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("IOS_CHECK %s" % ("PASS" if all_ok else "FAIL"))
+			await _shot(dir, "ios_practice")
 		"safe_area":
 			# iPhone (v1.1.12): the controls stay clear of the Dynamic Island and the home bar.
 			# iPhone 15 Pro in landscape: 2556 x 1179 px, 177 px kept free left and right, 63 px at the bottom.

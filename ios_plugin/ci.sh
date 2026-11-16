@@ -180,10 +180,17 @@ for want in ("iPhone 17 Pro", "iPhone 16 Pro", "Pro", "iPhone"):
 	sleep 2
 	say "running the game's ios_check test"
 	xcrun simctl launch "$udid" "$bundle" -- --tour=user://tour --only=ios_check
+	# the cloud Mac has no GPU: the simulator draws with Apple's software renderer (and the x86_64 app runs
+	# through Rosetta), so the first 3D frames take minutes. Wait up to 20 minutes for the test's verdict.
 	local i
-	for i in $(seq 1 150); do
+	for i in $(seq 1 120); do
+		grep -q "IOS_CHECK\|TOUR done" sim/godot.log && break
+		[ $((i % 6)) -eq 0 ] && echo "  ... $((i * 10)) s, $(wc -l < sim/godot.log) log lines"
+		sleep 10
+	done
+	for i in $(seq 1 18); do
 		grep -q "TOUR done" sim/godot.log && break
-		sleep 2
+		sleep 10
 	done
 	sleep 2
 	xcrun simctl io "$udid" screenshot sim/screen.png || true
