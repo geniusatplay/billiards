@@ -2622,13 +2622,20 @@ func _tour_step(dir: String, s: String) -> void:
 					2:
 						var mid2: int = game.net.match_id
 						quit_to("menu")
-						await _wait(1.0)
 						var told := false
-						for ev in srv.events:
-							if ev["match"] == mid2 and ev["type"] == "over":
-								var od: Dictionary = Marshalls.base64_to_variant(str(ev["data"]))
-								told = int(od.get("winner", -1)) == ghost.seat
-						on_ok = say.call(told and game == null, "this player leaves -> the other phone is told it has won") and on_ok
+						var kinds := []
+						var left_wait := 0.0
+						while not told and left_wait < 6.0:      # the leaving message goes out in the background
+							await _wait(0.25)
+							left_wait += 0.25
+							kinds.clear()
+							for ev in srv.events:
+								if ev["match"] == mid2:
+									kinds.append(ev["type"])
+									if ev["type"] == "over":
+										var od: Dictionary = Marshalls.base64_to_variant(str(ev["data"]))
+										told = int(od.get("winner", -1)) == ghost.seat
+						on_ok = say.call(told and game == null, "this player leaves -> the other phone is told it has won (after %.2f s; events: %s)" % [left_wait, kinds]) and on_ok
 				_close_overlays()
 				_end_match()
 				await _wait(0.3)
