@@ -64,7 +64,7 @@ func availability() -> String:
 		return "none"
 	var a: String = plugin.call("availability")
 	if a != _avail_cache:
-		print("[ar] ARCore availability: %s %s" % [a, last_error() if a == "error" else ""])
+		print("[ar] %s availability: %s %s" % ["ARKit" if ios else "ARCore", a, last_error() if a == "error" else ""])
 		_avail_cache = a
 	return a
 

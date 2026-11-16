@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      simulator_check:
+        description: "Also run the game's ios_check test on an iPhone simulator (slow: no GPU in the cloud)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -80,13 +85,15 @@ jobs:
             --notes "Built from ${GITHUB_SHA::7}. Install with Sideloadly: drag EmeraldBreak.ipa in, sign in with your Apple ID, Start. With a free Apple ID the app runs for 7 days, then install it again."
 
       - name: Test on an iPhone simulator (plugin, safe area, AR start-up)
+        # off unless started by hand (Actions -> iPhone build -> Run workflow -> tick the box): it's slow
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.simulator_check }}
         # informative: the .ipa above is already published; a slow simulator must not mark the build failed
         continue-on-error: true
         timeout-minutes: 40
         run: bash ios_plugin/ci.sh sim
 
       - name: Publish the simulator results as the "ios-sim-check" release
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.simulator_check }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
