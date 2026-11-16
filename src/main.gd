@@ -17,6 +17,8 @@ var _ad_due := false   # in memory only, never saved: a game closed on the score
 var _last_cfg: Dictionary = {}
 var _touch_count := 0
 var _toast_lbl: Label
+var _toast_wrap: CenterContainer
+var _toast_tw: Tween
 ## Gear whose shaders are already built (drawn once behind a cover): "cue:<id>", "balls:<id>", "table:<id>".
 var _warmed := {}
 var warm_enabled := true     # (the automated tour runs without the warm-up unless it is given --warmup)
@@ -53,12 +55,21 @@ func _ready() -> void:
 	overlay_host = UIKit.fullrect(Control.new())
 	overlay_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_root.add_child(overlay_host)
+	# v1.1.13: short messages sit on a dark pill (bare text was hard to read over the table and ran across the
+	# XP chest card); the strip centres the pill, whatever the text's length
+	_toast_wrap = CenterContainer.new()
+	_toast_wrap.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	_toast_wrap.offset_top = -175
+	_toast_wrap.offset_bottom = -80
+	_toast_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_wrap.modulate.a = 0.0
+	var pill := PanelContainer.new()
+	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pill.add_theme_stylebox_override("panel", UIKit.box(UIKit.GLASS_HI, 40, 1, UIKit.LINE, Vector4(34, 14, 34, 14), 12))
 	_toast_lbl = UIKit.label("", "H3Label", HORIZONTAL_ALIGNMENT_CENTER)
-	_toast_lbl.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	_toast_lbl.offset_top = -140
-	_toast_lbl.offset_left = -500
-	_toast_lbl.offset_right = 500
-	ui_root.add_child(_toast_lbl)
+	pill.add_child(_toast_lbl)
+	_toast_wrap.add_child(pill)
+	ui_root.add_child(_toast_wrap)
 	stage.set_idle_spin(true)
 	Sfx.music(true)
 	get_viewport().size_changed.connect(_on_resize)
@@ -301,10 +312,13 @@ func _show(name: String) -> void:
 
 func toast(text: String) -> void:
 	_toast_lbl.text = text
-	_toast_lbl.modulate.a = 1.0
-	var tw := create_tween()
-	tw.tween_interval(1.6)
-	tw.tween_property(_toast_lbl, "modulate:a", 0.0, 0.4)
+	ui_root.move_child(_toast_wrap, -1)       # above the match HUD too
+	_toast_wrap.modulate.a = 1.0
+	if _toast_tw:
+		_toast_tw.kill()                       # an older message's fade must not cut this one short
+	_toast_tw = create_tween()
+	_toast_tw.tween_interval(1.6)
+	_toast_tw.tween_property(_toast_wrap, "modulate:a", 0.0, 0.4)
 
 
 # ================================================================== matches
@@ -1182,6 +1196,10 @@ func _tour_step(dir: String, s: String) -> void:
 			res.append(["account created, back on Play Online, signed in", Net.signed_in() and Net.email() == "randy@example.com" and _screen is MenuScreens.OnlineScreen])
 			res.append(["the phone's player (and its progress) became the account's", str(Game.progress["player"]) == anon and int(srv.players[anon]["xp"]) == 1200])
 			res.append(["the password is not kept on the phone", not var_to_str(Game.progress).contains("secret1")])
+			var pill_r: Rect2 = (_toast_lbl.get_parent() as Control).get_global_rect()
+			res.append(["'Signed in as' shows on a pill above the screen, inside the window", _toast_wrap.modulate.a > 0.5
+				and _toast_lbl.text == "Signed in as randy@example.com" and ui_root.get_child(-1) == _toast_wrap
+				and Rect2(Vector2.ZERO, ui_root.size).encloses(pill_r) and pill_r.size.x < ui_root.size.x * 0.8])
 			await _shot(dir, "account_online_signed_in")
 			go("settings")
 			await _wait(0.4)
@@ -2498,6 +2516,7 @@ func _tour_step(dir: String, s: String) -> void:
 			var srv = load("res://tests/fake_server.gd").new()
 			var Ghost = load("res://tests/online_ghost.gd")
 			Net.fake = srv
+			_end_match()      # (a match left running by an earlier step would look like the online one starting)
 			var keep_pr: Dictionary = Game.progress.duplicate(true)
 			Game.progress = Game.fresh_progress()
 			Game.set_s("ar_mode", "studio")
