@@ -493,10 +493,15 @@ class OnlineScreen extends Screen:
 		_find = UIKit.button("Find a match", "PrimaryButton", "globe", 520)
 		_find.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_find.pressed.connect(func():
-			if _searching:
+			if not Net.signed_in():
+				router.call("go", "account")     # v1.1.13: online play is with an account
+			elif _searching:
 				_cancel()
 			else:
 				_search())
+		if not Net.signed_in():
+			_status.text = "Create an account or log in to play online."
+			_find.text = "Create account or log in"
 		body.add_child(_find)
 		var gap2 := Control.new()
 		gap2.custom_minimum_size = Vector2(0, 26)
@@ -533,7 +538,7 @@ class OnlineScreen extends Screen:
 		while _searching and is_inside_tree():
 			var body_d := Net.creds()
 			body_d["ping"] = ping
-			body_d["ver"] = Game.VERSION
+			body_d["ver"] = Net.ONLINE_VERSION
 			# the other phone shows this player's cue, and uses this player's table (if they break) or balls
 			body_d["info"] = {"name": Game.player_name(0), "level": Game.level(), "cue": str(Game.get_s("cue_skin")),
 				"table": str(Game.get_s("table_style")), "balls": str(Game.get_s("ball_set"))}
@@ -549,7 +554,12 @@ class OnlineScreen extends Screen:
 				Sfx.play("turn_chime", 0.9)
 				router.call("start_match", {"mode": "versus", "online": true, "net": m})
 				return
-			_say(L.t("Looking for an opponent… %d s") % int((Time.get_ticks_msec() - _t0) / 1000.0))
+			var line := L.t("Looking for an opponent… %d s") % int((Time.get_ticks_msec() - _t0) / 1000.0)
+			if int(r.get("other_ver", 0)) > 0:
+				# someone is looking too, on a version that can't play this one (v1.1.13: was the reason two
+				# phones never met)
+				line += "\n" + L.t("Players waiting on another version: %d. Update both phones to the latest version.") % int(r["other_ver"])
+			_say(line)
 			await get_tree().create_timer(1.5).timeout
 
 	func _failed() -> void:

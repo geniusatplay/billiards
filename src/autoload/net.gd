@@ -4,8 +4,14 @@ extends Node
 ## What goes to the server: a random player id with its key, the player's name, level progress (XP, owned
 ## gear, unopened packages) and, during an online match, the shots. Nothing else. The game works without it:
 ## when the phone is offline, progress simply stays on the phone and is sent the next time.
+## v1.1.13 (Randy): an account - email + password - is the player's id on every phone. The server keeps the
+## password only as a hash; the phone keeps the email and its own key (never the password).
 
 const URL := "https://emeraldvortexgames.com/eb/api.php"
+## Online version: only players with the same one are matched. Bump it when a match between this version and the
+## one before could go wrong (rules, physics, what is sent). Before v1.1.13 the full game version was used, so
+## two phones a patch apart (new songs, new gear) never met.
+const ONLINE_VERSION := "net2"
 
 var fake = null            # tests: an object with handle(action, body) -> Dictionary instead of the real server
 var last_error := ""
@@ -69,6 +75,7 @@ func api(action: String, body: Dictionary = {}) -> Dictionary:
 			# the server no longer knows this install (its data was reset): sign up afresh on the next call
 			Game.progress["player"] = ""
 			Game.progress["token"] = ""
+			Game.progress.erase("email")
 			Game.request_save()
 	return parsed
 
@@ -79,6 +86,86 @@ func registered() -> bool:
 
 func creds() -> Dictionary:
 	return {"id": str(Game.progress.get("player", "")), "token": str(Game.progress.get("token", ""))}
+
+
+## Signed in to an account (an email) on this phone.
+func signed_in() -> bool:
+	return registered() and email() != ""
+
+
+func email() -> String:
+	return str(Game.progress.get("email", ""))
+
+
+## Creates an account. If this phone has been playing already (it has a player id), that player - and its
+## progress - becomes the account's. Returns the server's reply ({ok, error}).
+func sign_up(mail: String, password: String) -> Dictionary:
+	var body := {"email": mail.strip_edges(), "password": password, "name": Game.player_name(0)}
+	if registered():
+		body.merge(creds())
+	var r: Dictionary = await api("signup", body)
+	if r.get("ok", false):
+		_use_account(r)
+		push_progress()
+	return r
+
+
+## Logs this phone in to an account: from now on it plays as that account's player. Of the two copies of the
+## progress (the account's on the server, this phone's) the one further along is kept, as at every start.
+func log_in(mail: String, password: String) -> Dictionary:
+	var r: Dictionary = await api("login", {"email": mail.strip_edges(), "password": password})
+	if r.get("ok", false):
+		_use_account(r)
+		var n := str(r.get("name", ""))
+		if n != "" and not n in Game.DEFAULT_NAMES and str(Game.get_s("p1_name")) in Game.DEFAULT_NAMES:
+			Game.store_player_name(0, n)
+		await pull_progress()
+		push_progress()
+	return r
+
+
+## Signs this phone out. The progress stays with the account (log in again to get it back); the phone starts
+## afresh as a new, anonymous player.
+func log_out() -> void:
+	if registered():
+		api("logout", creds())
+	_forget_account()
+
+
+## Deletes the account for good (the server asks for the password once more).
+func delete_account(password: String) -> Dictionary:
+	var body := creds()
+	body["password"] = password
+	var r: Dictionary = await api("delete_account", body)
+	if r.get("ok", false):
+		_forget_account()
+	return r
+
+
+func _use_account(r: Dictionary) -> void:
+	Game.progress["player"] = str(r["id"])
+	Game.progress["token"] = str(r["token"])
+	Game.progress["email"] = str(r.get("email", ""))
+	Game.request_save()
+
+
+func _forget_account() -> void:
+	_save_in = -1.0
+	Game.progress = Game.fresh_progress()
+	Game._fix_gear()
+	Game.progress_changed.emit()
+	Game.request_save()
+
+
+## The words for a reply's error, for the account screens.
+static func account_error(r: Dictionary) -> String:
+	match str(r.get("error", "")):
+		"bad_email": return "That doesn't look like an email address."
+		"short_password": return "The password needs at least 6 characters."
+		"email_taken": return "There is already an account with this email. Log in instead."
+		"wrong_login": return "Wrong email or password."
+		"too_many_tries": return "Too many wrong passwords. Try again in 15 minutes."
+	return "The game server cannot be reached. Check your internet connection and try again."
 
 
 ## Makes sure this install has a player id on the server. False when the server cannot be reached.

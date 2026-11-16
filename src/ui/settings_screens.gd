@@ -81,12 +81,88 @@ static func choice(parent: Control, label: String, key: String, options: Array, 
 	return box
 
 
+## v1.1.13: the account card (who is signed in; sign out; delete the account for good - both app stores ask for
+## that in any game with accounts).
+static func account_card(parent: Control, router: Node) -> void:
+	var acc := section(parent, "Account")
+	var buttons := HFlowContainer.new()
+	buttons.add_theme_constant_override("h_separation", 14)
+	buttons.add_theme_constant_override("v_separation", 12)
+	buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if not Net.signed_in():
+		acc.add_child(UIKit.label("Not signed in", "MutedLabel"))
+		var make := UIKit.button("Create account", "PrimaryButton", "user", 360)
+		make.pressed.connect(func(): router.call("go", "account"))
+		buttons.add_child(make)
+		var login := UIKit.button("Log in", "", "", 300)
+		login.pressed.connect(func(): router.call("go", "account_login"))
+		buttons.add_child(login)
+		acc.add_child(buttons)
+		return
+	var who := UIKit.label(L.t("Signed in as %s") % Net.email(), "")
+	who.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED      # already translated, with the email in it
+	acc.add_child(who)
+	var out := UIKit.button("Sign out", "", "", 300)
+	out.pressed.connect(func():
+		Sfx.ui("tap")
+		Net.log_out()
+		router.call("toast", L.t("Signed out. Your progress stays with your account."))
+		router.call("go", "settings", true))
+	buttons.add_child(out)
+	var del := UIKit.button("Delete account", "GhostButton", "", 300)
+	buttons.add_child(del)
+	acc.add_child(buttons)
+	# deleting asks for the password once more, right here
+	var box := UIKit.vbox(10)
+	box.visible = false
+	var note := UIKit.label("This deletes your account and its progress for good. Enter your password to confirm.", "SmallLabel")
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(note)
+	var row := UIKit.hbox(14)
+	var pw := LineEdit.new()
+	pw.secret = true
+	pw.placeholder_text = "Password"
+	pw.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_PASSWORD
+	pw.custom_minimum_size = Vector2(0, 76)
+	pw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(pw)
+	var go := UIKit.button("Delete for good", "GhostButton", "", 340)
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		go.add_theme_color_override(c, UIKit.CORAL)       # a warning colour, not the green "go" button
+	row.add_child(go)
+	box.add_child(row)
+	var msg := UIKit.label("", "SmallLabel")
+	msg.add_theme_color_override("font_color", UIKit.CORAL)
+	box.add_child(msg)
+	acc.add_child(box)
+	del.pressed.connect(func():
+		Sfx.ui("toggle")
+		box.visible = not box.visible)
+	go.pressed.connect(func():
+		if pw.text.length() < 6:
+			msg.text = "Wrong email or password."
+			return
+		go.disabled = true
+		msg.text = "Please wait…"
+		DisplayServer.virtual_keyboard_hide()
+		var r: Dictionary = await Net.delete_account(pw.text)
+		if not is_instance_valid(go):
+			return
+		go.disabled = false
+		if r.get("ok", false):
+			router.call("toast", L.t("Account deleted."))
+			router.call("go", "settings", true)
+		else:
+			msg.text = Net.account_error(r))
+
+
 ## ------------------------------------------------------------ Settings
 class SettingsScreen extends MenuScreens.Screen:
 	func _ready() -> void:
 		scrim(0.72)
 		header("Settings")
 		content(170, 200)
+		SettingsScreens.account_card(body, router)
 		var lang := SettingsScreens.section(body, "Language")
 		var lrow := HFlowContainer.new()
 		lrow.add_theme_constant_override("h_separation", 12)

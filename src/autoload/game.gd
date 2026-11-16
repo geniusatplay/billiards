@@ -8,7 +8,7 @@ signal progress_changed          # XP, level, owned items or unopened packages c
 
 const TITLE := "Emerald Break"
 const STUDIO := "Emerald Vortex Games"
-const VERSION := "1.1.12"
+const VERSION := "1.1.13"
 const ALT_TITLES := ["Pocket Horizon", "Felt Realm", "Gemshot Billiards", "Cue Vortex"]
 const SAVE_PATH := "user://emerald_break_save.json"
 

@@ -79,6 +79,8 @@ func _ready() -> void:
 	else:
 		await _warm_up()
 		go("menu")
+		if not Net.signed_in() and not OS.get_cmdline_user_args().has("--offline"):
+			go("account")        # v1.1.13: ask for an account at every start until this phone is signed in
 		print("[boot] menu built at %d ms" % Time.get_ticks_msec())
 		await RenderingServer.frame_post_draw
 		print("[boot] first frame drawn at %d ms" % Time.get_ticks_msec())
@@ -284,6 +286,8 @@ func _show(name: String) -> void:
 		"controls": s = MenuScreens.ControlsScreen.new(self)
 		"settings": s = SettingsScreens.SettingsScreen.new(self)
 		"help": s = MenuScreens.HelpScreen.new(self)
+		"account": s = AccountScreen.new(self)
+		"account_login": s = AccountScreen.new(self, true)
 		_: s = MenuScreens.MainMenu.new(self)
 	_screen = s
 	FpsCounter.phase = "screen " + name
@@ -903,7 +907,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -1136,6 +1140,106 @@ func _tour_step(dir: String, s: String) -> void:
 					shot_taken = true
 					await _shot(dir, "jump")
 			print("JUMP %s (peak %.1f cm)" % ["PASS" if peak > 0.02 else "FAIL", peak * 100.0])
+		"account":
+			# v1.1.13 accounts against the in-memory server: create one on a phone that has been playing (its
+			# progress comes along), log in on a "second phone", wrong password, taken email, sign out, delete;
+			# Play Online asks for an account; a player waiting on another version is mentioned.
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			var res := []
+			var fill := func(mail: String, pw: String) -> void:
+				_screen.get("_email").text = mail
+				_screen.get("_pass").text = pw
+				_screen.call("_submit")
+			var said := func() -> String: return str((_screen.get("_msg") as Label).text)
+			# a phone that has been playing without an account
+			Game.progress = Game.fresh_progress()
+			Game.progress["xp"] = 1200
+			await Net.ensure_player()
+			await Net.push_progress()
+			var anon := str(Game.progress.get("player", ""))
+			_stack.clear()
+			go("menu")
+			go("online")
+			await _wait(0.4)
+			var find: Button = _screen.get("_find")
+			res.append(["Play Online without an account asks for one", not Net.signed_in() and find.text == "Create account or log in"])
+			await _shot(dir, "account_online_ask")
+			find.pressed.emit()
+			await _wait(0.4)
+			res.append(["... and its button opens the account screen", _screen is AccountScreen])
+			await _shot(dir, "account_create")
+			fill.call("randy-at-example", "secret1")
+			await _wait(0.2)
+			res.append(["a bad email is caught on the phone", said.call() == "That doesn't look like an email address."])
+			fill.call("randy@example.com", "123")
+			await _wait(0.2)
+			res.append(["a short password is caught on the phone", said.call() == "The password needs at least 6 characters."])
+			await _shot(dir, "account_error")
+			fill.call("Randy@Example.com", "secret1")
+			await _wait(0.6)
+			res.append(["account created, back on Play Online, signed in", Net.signed_in() and Net.email() == "randy@example.com" and _screen is MenuScreens.OnlineScreen])
+			res.append(["the phone's player (and its progress) became the account's", str(Game.progress["player"]) == anon and int(srv.players[anon]["xp"]) == 1200])
+			res.append(["the password is not kept on the phone", not var_to_str(Game.progress).contains("secret1")])
+			await _shot(dir, "account_online_signed_in")
+			go("settings")
+			await _wait(0.4)
+			await _shot(dir, "account_settings")
+			# a second phone: nothing on it yet; log in with the account
+			Game.progress = Game.fresh_progress()
+			go("account_login")
+			await _wait(0.3)
+			fill.call("randy@example.com", "wrong-one")
+			await _wait(0.3)
+			res.append(["wrong password -> 'Wrong email or password.'", said.call() == "Wrong email or password." and not Net.signed_in()])
+			fill.call("randy@example.com", "secret1")
+			await _wait(0.6)
+			res.append(["second phone logged in: same player, the account's progress (1,200 XP)", Net.signed_in() and str(Game.progress["player"]) == anon and Game.xp() == 1200])
+			# taken email
+			Game.progress = Game.fresh_progress()
+			go("account")
+			await _wait(0.3)
+			fill.call("randy@example.com", "another1")
+			await _wait(0.4)
+			res.append(["signing up with a taken email -> switched to Log in, email kept", bool(_screen.get("_login")) and _screen.get("_email").text == "randy@example.com"
+				and said.call() == "There is already an account with this email. Log in instead."])
+			# sign out
+			fill.call("randy@example.com", "secret1")
+			await _wait(0.6)
+			Net.log_out()
+			await _wait(0.2)
+			res.append(["sign out: not signed in, the phone starts afresh", not Net.signed_in() and Game.xp() == 0])
+			# delete (log in again first)
+			await Net.log_in("randy@example.com", "secret1")
+			var bad: Dictionary = await Net.delete_account("nope-nope")
+			var gone: Dictionary = await Net.delete_account("secret1")
+			res.append(["delete needs the password; then the account and its player are gone", not bad.get("ok", false) and gone.get("ok", false) and srv.accounts.is_empty()
+				and not srv.players.has(anon) and not Net.signed_in()])
+			# Play Online: someone is waiting on another version
+			await Net.sign_up("second@example.com", "secret2")
+			var old = load("res://tests/online_ghost.gd").new()
+			old.join(srv, "Old", 40, "1.1.9")
+			_stack.clear()
+			go("menu")
+			go("online")
+			await _wait(0.3)
+			_screen.call("_search")
+			await _wait(2.5)
+			var st := str((_screen.get("_status") as Label).text)
+			res.append(["a player on another version is mentioned while searching", st.contains("another version: 1")])
+			await _shot(dir, "account_other_version")
+			_screen.call("_cancel")
+			await _wait(0.3)               # let the last calls land on this test's server
+			Net.set("_save_in", -1.0)       # and no delayed save afterwards
+			Net.fake = null
+			Game.progress = keep_pr
+			Game.request_save()
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("ACCOUNT %s" % ("PASS" if all_ok else "FAIL"))
 		"ios_check":
 			# Run on an iPhone or the iOS simulator (the cloud build does: ios_plugin/ci.sh sim): the real ARKit
 			# plugin and the real notch. --only=ios_check. Results are printed before the picture is taken.
@@ -2397,13 +2501,14 @@ func _tour_step(dir: String, s: String) -> void:
 			var keep_pr: Dictionary = Game.progress.duplicate(true)
 			Game.progress = Game.fresh_progress()
 			Game.set_s("ar_mode", "studio")
+			await Net.sign_up("tester@example.com", "secret1")      # v1.1.13: online play is with an account
 			var on_ok := true
 			var say := func(good: bool, what: String):
 				print("  %s  %s" % ["ok  " if good else "FAIL", what])
 				return good
 			for round_no in 3:
 				var ghost = Ghost.new()
-				ghost.join(srv, "Ghost", 40, Game.VERSION)
+				ghost.join(srv, "Ghost", 9000, Net.ONLINE_VERSION)
 				if round_no == 1:
 					ghost.quit_after = 0      # leaves at its first turn
 				_stack.clear()
@@ -2414,13 +2519,15 @@ func _tour_step(dir: String, s: String) -> void:
 				_screen.call("_search")
 				var waited := 0.0
 				while game == null and waited < 20.0:
-					ghost.tick("Ghost", 40, Game.VERSION)
+					ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
 					await _wait(0.1)
 					waited += 0.1
 				if not say.call(game != null and game.online and game.net != null, "round %d: found an opponent and the match started" % (round_no + 1)):
 					on_ok = false
 					break
 				if round_no == 0:
+					if ghost.match_id == 0:
+						ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)     # let it pick up its match first
 					on_ok = say.call(game.net.host and not ghost.host, "the faster connection hosts (this phone: host %s, the other: host %s)" % [game.net.host, ghost.host]) and on_ok
 					on_ok = say.call(game.net_seat == 1 - ghost.seat and game.player_names[ghost.seat] == "Ghost", "seats %d / %d, opponent's name shown: %s" % [game.net_seat, ghost.seat, str(game.player_names)]) and on_ok
 					on_ok = say.call(Net.registered() and srv.players.has(str(Game.progress.get("player", ""))), "this install registered itself as a player") and on_ok
@@ -2441,7 +2548,7 @@ func _tour_step(dir: String, s: String) -> void:
 				var my_shots := 0
 				while game != null and game.state != PoolGame.State.OVER and frames < 60000:
 					srv.now = Time.get_ticks_msec() / 1000.0
-					ghost.tick("Ghost", 40, Game.VERSION)
+					ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
 					frames += 1
 					if game.plays_here(game.current) and game.state in [PoolGame.State.AIM, PoolGame.State.BALL_IN_HAND]:
 						if round_no == 2 and my_shots >= 1:
@@ -2472,7 +2579,7 @@ func _tour_step(dir: String, s: String) -> void:
 					0:
 						on_ok = say.call(game != null and game.state == PoolGame.State.OVER, "the match was played to the end (%d shots here, %d there)" % [my_shots, ghost.shots_sent]) and on_ok
 						for i in 30:
-							ghost.tick("Ghost", 40, Game.VERSION)
+							ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
 							await _wait(0.05)
 						on_ok = say.call(game.rules.winner >= 0 and game.rules.winner == ghost.rules.winner, "both phones name the same winner (seat %d)" % game.rules.winner) and on_ok
 						on_ok = say.call(ghost.drift == 0 and ghost.shots_seen == my_shots, "the other phone replayed all %d of this phone's shots to exactly the same table" % ghost.shots_seen) and on_ok
