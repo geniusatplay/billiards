@@ -1516,6 +1516,7 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(0.6)
 			stage.set_view(Stage.View.TOP)
 			await _wait(1.6)
+			game.call("_set_break", false)    # a foul after the break (before it, the ball is kept behind the head string)
 			game.rules.ball_in_hand = true
 			game.call("_start_turn")
 			await _wait(0.2)
@@ -1879,6 +1880,8 @@ func _tour_step(dir: String, s: String) -> void:
 					elif n is MeshInstance3D and n != stage.table_view: c[3] += 1
 				return c
 			var ok := true
+			quit_to("menu")                    # (a step before may have left a match on the table)
+			await _wait(0.4)
 			var base: Array = counts.call()   # menu table: no balls, no cue
 			for sc in ["ghost_target", "pro_dial"]:
 				Game.set_s("control_scheme", sc)
