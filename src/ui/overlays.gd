@@ -52,7 +52,10 @@ class PauseMenu extends Control:
 		if router.call("is_online"):
 			items.remove_at(1)      # an online match cannot be restarted, and the clock keeps running
 		items.append([_music_text(), "sound", "toggle_music", ""])
-		items.append_array([["Settings", "gear", "settings", ""], ["Debug menu", "debug", "open_debug", ""], ["Quit to menu", "home", "quit_match", "GhostButton"]])
+		items.append(["Settings", "gear", "settings", ""])
+		if Game.dev_tools():
+			items.append(["Debug menu", "debug", "open_debug", ""])      # (not in the store builds)
+		items.append(["Quit to menu", "home", "quit_match", "GhostButton"])
 		for it in items:
 			var b := UIKit.button(it[0], it[3], it[1], 560)
 			var act: String = it[2]
@@ -113,13 +116,17 @@ class PauseMenu extends Control:
 			_side.remove_child(c)
 			c.queue_free()
 		var ar: bool = router.call("view_is_ar")
-		_pair("View", ["AR (walk around)", "Studio (no camera)"], 0 if ar else 1, func(i: int):
+		# v1.1.15: the same two ways as the main menu's "Place world"
+		_pair("World", ["In front of me (AR)", "Play in place"], 0 if ar else 1, func(i: int):
 			router.call("switch_view", "auto" if i == 0 else "studio")
 			if is_inside_tree() and not is_queued_for_deletion():
 				_fill_side())
 		if ar:
-			_pair("Surface", ["Desk (mini)", "Floor (life-size)"], 1 if Game.get_s("surface") == "floor" else 0, func(i: int):
-				Game.set_s("surface", "floor" if i == 1 else "desk"))
+			_pair("World size", ["Mini", "Life-size"], 1 if Game.get_s("surface") == "floor" else 0, func(i: int):
+				if i == 1:
+					Game.set_world_size(maxf(float(Game.get_s("ar_scale_floor")), Game.WORLD_FLOOR_FROM))
+				else:
+					Game.set_world_size(minf(float(Game.get_s("ar_scale_desk")), Game.WORLD_FLOOR_FROM - 0.01)))
 			if router.call("can_move_table"):
 				var mv := UIKit.button("Move / raise / lower table", "", "move")
 				mv.pressed.connect(func(): router.call("move_table"))
@@ -127,7 +134,8 @@ class PauseMenu extends Control:
 			var again := UIKit.button("Place the table again", "", "recenter")
 			again.pressed.connect(func(): router.call("replace_table"))
 			_side.add_child(_lower(again))
-			SettingsScreens.toggle(_side, "Scene background in AR", "ar_background", func(_on: bool): _fill_side.call_deferred())
+			if Game.dev_tools():      # (a developer option since v1.1.15: Play in place is the way to a world background)
+				SettingsScreens.toggle(_side, "Scene background in AR", "ar_background", func(_on: bool): _fill_side.call_deferred())
 		if not ar or bool(Game.get_s("ar_background")):
 			_scene_row()
 

@@ -12,6 +12,7 @@ var _info_title: Label
 var _info_sub: Label
 var _toast: Label
 var _toast_tw: Tween
+var _toast_top := 150.0
 var _banner: PanelContainer
 var _banner_title: Label
 var _banner_sub: Label
@@ -126,6 +127,10 @@ func _build() -> void:
 		lbl.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.06, 0.85))
 		lbl.add_theme_constant_override("outline_size", 8)
 	_info_sub.add_theme_color_override("font_color", Color(0.86, 0.9, 0.96))
+	if game.tutorial:
+		# the objective card takes this place
+		_info_title.visible = false
+		_info_sub.visible = false
 	# which AR is running, always visible in AR (walk-around vs basic, and why)
 	_ar_badge = UIKit.label("", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
 	_ar_badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -268,9 +273,11 @@ func _make_player_card(i: int) -> PanelContainer:
 
 
 func _title_text() -> String:
+	if game.tutorial:
+		return "TUTORIAL"
 	if game.mode != "versus":
 		return "PRACTICE"
-	if game.online:
+	if game.looks_online():
 		return "8-BALL · ONLINE"
 	return (L.t("8-BALL · VS CPU (%s)") % L.up(L.t(AIPlayer.NAMES[game.ai_level]))) if game.vs_ai else "8-BALL · LOCAL TURN BASED"
 
@@ -402,63 +409,24 @@ func _update_adjust_label() -> void:
 
 
 func _build_ar_panel() -> void:
-	_ar_panel = UIKit.panel()
-	var v := UIKit.vbox(14)
-	_ar_panel.add_child(v)
-	_ar_lbl = UIKit.label("Starting walk-around AR…", "H3Label", HORIZONTAL_ALIGNMENT_CENTER)
-	_ar_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_ar_lbl.custom_minimum_size.x = 760
-	v.add_child(_ar_lbl)
-	# small print when AR can't start: the exact error and device facts (a screenshot of this is all
-	# that's needed to diagnose a phone-specific problem)
-	_ar_detail = UIKit.label("", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
-	_ar_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_ar_detail.custom_minimum_size.x = 760
-	_ar_detail.visible = false
-	v.add_child(_ar_detail)
-	var row := UIKit.hbox(14)
-	_ar_sizes = row
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	var desk := UIKit.button("Mini", "ChipButton")
-	var floor_b := UIKit.button("Life-size", "ChipButton")
-	desk.toggle_mode = true
-	floor_b.toggle_mode = true
-	var grp := ButtonGroup.new()
-	desk.button_group = grp
-	floor_b.button_group = grp
-	desk.button_pressed = Game.get_s("surface") != "floor"
-	floor_b.button_pressed = Game.get_s("surface") == "floor"
-	desk.pressed.connect(func(): Game.set_s("surface", "desk"))
-	floor_b.pressed.connect(func(): Game.set_s("surface", "floor"))
-	row.add_child(desk)
-	row.add_child(floor_b)
-	v.add_child(row)
-	var row2 := UIKit.hbox(14)
-	row2.alignment = BoxContainer.ALIGNMENT_CENTER
-	_ar_place = UIKit.button("Place table", "PrimaryButton", "check", 360)
-	_ar_place.pressed.connect(func():
-		stage.place_table())
-	_ar_retry = UIKit.button("Try again", "PrimaryButton", "refresh", 280)
-	_ar_retry.pressed.connect(func(): stage.retry_ar())
-	_ar_retry.visible = false
-	_ar_install = UIKit.button("Open Play Store", "PrimaryButton", "camera", 340)
-	_ar_install.pressed.connect(func(): stage.install_world_ar())
-	_ar_install.visible = false
-	_ar_settings = UIKit.button("Open app settings", "PrimaryButton", "gear", 360)
-	_ar_settings.pressed.connect(func(): stage.open_app_settings())
-	_ar_settings.visible = false
-	var studio := UIKit.button("Play without AR", "GhostButton", "cube")
-	studio.pressed.connect(func():
+	# v1.1.15: the panel is shared with the main menu's "Place world" (ArPlacePanel); its parts keep their old names
+	# here so the checks that look for them still find them
+	var p := ArPlacePanel.new(stage)
+	_ar_panel = p
+	_ar_lbl = p.lbl
+	_ar_detail = p.detail
+	_ar_sizes = p.sizes
+	_ar_place = p.place
+	_ar_retry = p.retry
+	_ar_install = p.install
+	_ar_settings = p.settings_b
+	_ar_studio = p.studio
+	p.without_ar.connect(func():
+		Game.world_ready = "studio"         # (and for the next matches too, until Place world is chosen again)
+		Game.set_s("ar_mode", "studio")
 		stage.set_mode(Stage.Mode.STUDIO)
 		_show_ar_panel(false)
 		game.on_table_placed())
-	_ar_studio = studio
-	row2.add_child(_ar_place)
-	row2.add_child(_ar_install)
-	row2.add_child(_ar_settings)
-	row2.add_child(_ar_retry)
-	row2.add_child(studio)
-	v.add_child(row2)
 	_ar_panel.visible = false
 	add_child(_ar_panel)
 	_ar_panel.minimum_size_changed.connect(_place_ar_panel)
@@ -480,7 +448,7 @@ func _layout() -> void:
 	# the pot feed: under the player card, on the side away from the tool buttons
 	_feed.position = Vector2(30 if right else vp.x - 360, 236)
 	_feed.max_height = maxf(vp.y - 380.0 - 16.0 - 236.0, 160.0)    # down to the cue-control chip
-	_toast.position = Vector2(vp.x * 0.5 - 600, 150)
+	_toast.position = Vector2(vp.x * 0.5 - 600, _toast_top)
 	_toast.size = Vector2(1200, 60)
 	_banner.position = Vector2(vp.x * 0.5 - 420, vp.y * 0.36)
 	_banner.custom_minimum_size = Vector2(840, 0)
@@ -559,7 +527,10 @@ func _set_view(i: int) -> void:
 
 func _refresh_tools() -> void:
 	_btn_hand.visible = (game.mode == "practice" and game.state in [PoolGame.State.AIM, PoolGame.State.BALL_IN_HAND]) or ((game.rules.ball_in_hand or game.break_pending()) and game.is_human_turn() and game.state == PoolGame.State.AIM)
-	_btn_undo.visible = game.mode == "practice"
+	_btn_undo.visible = game.mode == "practice" and not game.tutorial
+	if game.tutorial:
+		# the tutorial says when to move the cue ball (the Place ball button does it); free moves would skip objectives
+		_btn_hand.visible = false
 	_btn_recenter.visible = stage.is_ar()
 	_btn_adjust.visible = stage.is_ar()
 	_btn_gear.visible = gear_drawer_allowed()
@@ -596,9 +567,9 @@ func _on_turn(player: int, inf: Dictionary) -> void:
 			control_layer.visible = false   # the next player's cue controls stay out of sight until they take the phone
 			return
 		_show_banner_for(_pending_turn)
-	elif game.mode == "practice" and inf.get("first", false):
+	elif game.mode == "practice" and inf.get("first", false) and not game.tutorial:
 		_show_banner("PRACTICE", "Shoot freely. Hand button moves the cue ball.", UIKit.SKY)
-	if inf.get("first", false) and game.online:
+	if inf.get("first", false) and game.looks_online():
 		# whose table and whose balls, once the turn banner has gone
 		get_tree().create_timer(2.2).timeout.connect(func():
 			if is_instance_valid(self) and is_inside_tree():
@@ -732,6 +703,12 @@ func pot_feed() -> PotFeed:
 	return _feed
 
 
+## The tutorial's objective card takes the top of the screen: the messages go under it.
+func set_toast_top(y: float) -> void:
+	_toast_top = y
+	_toast.position.y = y
+
+
 func toast(text: String, kind := "info") -> void:
 	_toast.text = text
 	var col := UIKit.TEXT
@@ -766,6 +743,8 @@ func _on_state(s: int) -> void:
 
 func _on_placed(placed: bool) -> void:
 	_show_ar_panel(not placed)
+	if placed and stage.is_ar():
+		Game.world_ready = "ar"       # (it stays in the room for the next match too)
 	if _adjust_panel.visible and (not placed or not stage.is_ar()):
 		close_table_adjust()
 	if placed:
@@ -801,7 +780,7 @@ func open_gear() -> void:
 ## The gear drawer is a developer tool (Settings → Developer tools; on while the game is being tested). It is never
 ## offered in an online match: the table and the balls there come from the two players, and each sees the other's cue.
 func gear_drawer_allowed() -> bool:
-	return bool(Game.get_s("gear_drawer")) and not game.online
+	return bool(Game.get_s("gear_drawer")) and not game.looks_online()
 
 
 func gear_open() -> bool:
@@ -887,8 +866,10 @@ func _refresh() -> void:
 			var g: int = d["groups"][i]
 			(c["sub"] as Label).text = (L.t("%s · %d left") % [EightBall.group_name(g), d["remaining"][i]]) if g >= 0 else "Open table"
 		elif d["mode"] == "practice":
-			(c["sub"] as Label).text = "Free shooting · no clock"
-	if d["mode"] == "versus":
+			(c["sub"] as Label).text = "One objective at a time" if game.tutorial else "Free shooting · no clock"
+	if game.tutorial:
+		_info_sub.text = ""
+	elif d["mode"] == "versus":
 		_info_sub.text = "Ball in hand" if d.get("ball_in_hand", false) else ("Open table" if d.get("open", true) else "Groups set")
 	else:
 		_info_sub.text = "Free shooting · move the cue ball any time with the hand button"
@@ -948,36 +929,7 @@ func _process(_delta: float) -> void:
 
 ## The AR panel has three faces: starting up, can't start (why + what to do), and placing the table.
 func _update_ar_panel() -> void:
-	var st: int = stage.ar_state if stage.mode == Stage.Mode.WORLD_AR else Stage.ArState.OFF
-	var blocked := st == Stage.ArState.BLOCKED
-	_ar_place.visible = not blocked
-	_ar_place.disabled = not stage.can_place()
-	_ar_sizes.visible = not blocked
-	_ar_detail.visible = blocked
-	_ar_install.visible = blocked and stage.ar_can_install()
-	_ar_settings.visible = blocked and stage.ar_block == "permission"
-	_ar_retry.visible = blocked
-	var text := ""
-	match st:
-		Stage.ArState.BLOCKED:
-			text = stage.ar_block_text()
-			_ar_detail.text = stage.ar_detail()
-		Stage.ArState.PERMISSION:
-			text = "Allow camera access so the table can appear in your room."
-		Stage.ArState.CHECKING, Stage.ArState.STARTING:
-			text = "Starting walk-around AR…"
-		Stage.ArState.RUNNING:
-			if stage.arcore.tracking != 2:
-				var why := stage.arcore.failure_text()
-				text = (why + " · " if why != "" else "") + L.t("Move your phone slowly so it can learn the room…")
-			elif stage.surface_found():
-				text = "Floor found ✓  Point where the table should stand and tap Place — then walk around it, it stays put."
-			elif stage.can_place():
-				text = "Floor not locked yet — tap Place to use this spot, or keep sweeping the phone over the floor."
-			else:
-				text = "Point the phone at the floor and sweep it slowly side to side until the table appears."
-	if _ar_lbl.text != text:
-		_ar_lbl.text = text
+	(_ar_panel as ArPlacePanel).refresh()
 
 
 func _draw_overlay() -> void:

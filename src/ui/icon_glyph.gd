@@ -214,5 +214,65 @@ func _draw() -> void:
 		"spin":
 			draw_arc(P.call(0.5, 0.5), s * 0.38, 0, TAU, 32, c, w, true)
 			draw_circle(P.call(0.6, 0.36), s * 0.08, c)
+		# v1.1.15 (options menu, world placement, sharing)
+		"music":
+			draw_circle(P.call(0.3, 0.74), s * 0.12, c)
+			draw_circle(P.call(0.74, 0.64), s * 0.12, c)
+			draw_line(P.call(0.41, 0.74), P.call(0.41, 0.2), c, w * 1.1, true)
+			draw_line(P.call(0.85, 0.64), P.call(0.85, 0.12), c, w * 1.1, true)
+			draw_colored_polygon(PackedVector2Array([P.call(0.39, 0.16), P.call(0.87, 0.06), P.call(0.87, 0.2), P.call(0.39, 0.3)]), c)
+		"language":
+			# a speech bubble with an "A" in it
+			draw_rect(Rect2(P.call(0.1, 0.14), Vector2(s * 0.8, s * 0.56)), c, false, w)
+			draw_colored_polygon(PackedVector2Array([P.call(0.26, 0.68), P.call(0.44, 0.68), P.call(0.26, 0.88)]), c)
+			draw_polyline(PackedVector2Array([P.call(0.36, 0.58), P.call(0.5, 0.24), P.call(0.64, 0.58)]), c, w, true)
+			draw_line(P.call(0.41, 0.46), P.call(0.59, 0.46), c, w * 0.9, true)
+		"size":
+			# two corners pulled apart
+			draw_line(P.call(0.2, 0.8), P.call(0.8, 0.2), c, w, true)
+			draw_polyline(PackedVector2Array([P.call(0.52, 0.2), P.call(0.8, 0.2), P.call(0.8, 0.48)]), c, w, true)
+			draw_polyline(PackedVector2Array([P.call(0.2, 0.52), P.call(0.2, 0.8), P.call(0.48, 0.8)]), c, w, true)
+		"height":
+			draw_line(P.call(0.5, 0.12), P.call(0.5, 0.88), c, w, true)
+			draw_polyline(PackedVector2Array([P.call(0.32, 0.3), P.call(0.5, 0.12), P.call(0.68, 0.3)]), c, w, true)
+			draw_polyline(PackedVector2Array([P.call(0.32, 0.7), P.call(0.5, 0.88), P.call(0.68, 0.7)]), c, w, true)
+			draw_line(P.call(0.14, 0.88), P.call(0.86, 0.88), c, w * 0.7, true)
+		"place":
+			# the AR viewfinder's corners round a small table
+			for cx in [0.0, 1.0]:
+				for cy in [0.0, 1.0]:
+					var corner: Vector2 = P.call(0.1 + cx * 0.8, 0.1 + cy * 0.8)
+					var dx: float = (1.0 - 2.0 * cx) * s * 0.2
+					var dy: float = (1.0 - 2.0 * cy) * s * 0.2
+					draw_polyline(PackedVector2Array([corner + Vector2(dx, 0), corner, corner + Vector2(0, dy)]), c, w, true)
+			draw_rect(Rect2(P.call(0.28, 0.4), Vector2(s * 0.44, s * 0.14)), c)
+			draw_line(P.call(0.33, 0.54), P.call(0.33, 0.68), c, w * 0.9, true)
+			draw_line(P.call(0.67, 0.54), P.call(0.67, 0.68), c, w * 0.9, true)
+		"image":
+			draw_rect(Rect2(P.call(0.1, 0.18), Vector2(s * 0.8, s * 0.64)), c, false, w)
+			draw_colored_polygon(PackedVector2Array([P.call(0.16, 0.76), P.call(0.42, 0.44), P.call(0.6, 0.64), P.call(0.7, 0.54), P.call(0.84, 0.76)]), c)
+			draw_circle(P.call(0.7, 0.34), s * 0.07, c)
+		"share":
+			var a1: Vector2 = P.call(0.74, 0.2)
+			var a2: Vector2 = P.call(0.26, 0.5)
+			var a3: Vector2 = P.call(0.74, 0.8)
+			draw_line(a1, a2, c, w, true)
+			draw_line(a2, a3, c, w, true)
+			for q in [a1, a2, a3]:
+				draw_circle(q, s * 0.12, c)
+		"copy":
+			draw_rect(Rect2(P.call(0.3, 0.3), Vector2(s * 0.54, s * 0.58)), c, false, w)
+			draw_polyline(PackedVector2Array([P.call(0.16, 0.66), P.call(0.16, 0.12), P.call(0.62, 0.12)]), c, w, true)
+		"qr":
+			for q in [Vector2(0.12, 0.12), Vector2(0.58, 0.12), Vector2(0.12, 0.58)]:
+				draw_rect(Rect2(P.call(q.x, q.y), Vector2(s * 0.3, s * 0.3)), c, false, w)
+				draw_rect(Rect2(P.call(q.x + 0.09, q.y + 0.09), Vector2(s * 0.12, s * 0.12)), c)
+			for q in [Vector2(0.6, 0.6), Vector2(0.6, 0.76), Vector2(0.76, 0.76)]:
+				draw_rect(Rect2(P.call(q.x, q.y), Vector2(s * 0.12, s * 0.12)), c)
+		"school":
+			# a mortarboard: the tutorial
+			draw_colored_polygon(PackedVector2Array([P.call(0.5, 0.18), P.call(0.94, 0.38), P.call(0.5, 0.58), P.call(0.06, 0.38)]), c)
+			draw_polyline(PackedVector2Array([P.call(0.24, 0.48), P.call(0.24, 0.72), P.call(0.5, 0.84), P.call(0.76, 0.72), P.call(0.76, 0.48)]), c, w, true)
+			draw_line(P.call(0.88, 0.4), P.call(0.88, 0.7), c, w * 0.8, true)
 		_:
 			draw_arc(P.call(0.5, 0.5), s * 0.36, 0, TAU, 24, c, w, true)

@@ -41,6 +41,8 @@ def main():
     numbers = [int(n) for b in kept for n in re.findall(r"(?m)^\[preset\.(\d+)\]$", b)]
     n = max(numbers) + 1 if numbers else 0
 
+    # v1.1.15: EB_STORE=1 makes the App Store version (export feature "store": no debug menu, no developer options)
+    features = "store" if os.environ.get("EB_STORE", "") == "1" else ""
     ios = f"""[preset.{n}]
 
 name="iOS"
@@ -48,7 +50,7 @@ platform="iOS"
 runnable=false
 advanced_options=false
 dedicated_server=false
-custom_features=""
+custom_features="{features}"
 export_filter="all_resources"
 include_filter=""
 exclude_filter="{EXCLUDE}"

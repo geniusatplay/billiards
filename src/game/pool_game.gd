@@ -19,6 +19,15 @@ enum State { SETUP, PLACE_TABLE, AIM, BALL_IN_HAND, ROLLING, AI_THINK, OVER }
 var mode := "practice"
 var vs_ai := false
 var ai_level := 1
+## v1.1.15: Play Online found nobody within a minute: the AI plays under a screen name (FillIn.make), and the
+## match looks, plays and pays like an online one. Empty for every other match.
+var fill_in := {}
+## v1.1.15: the tutorial runs as a practice match (src/game/tutorial.gd arranges the table between objectives):
+## no rack-cleared screen, no stats; the aim guide it asks for; the last stroke for its checks.
+var tutorial := false
+var guide_override := -1
+var last_shot := {}
+var _ai_think := 0.0
 var online := false          # an online match: one seat is played here, the other arrives over the network
 var net_seat := 0            # which seat is played on this phone in an online match
 var xp_track: XP.Tracker     # counts this phone's player's XP (matches only)
@@ -98,6 +107,8 @@ func _ready() -> void:
 ## Player names in the current language (default names and the CPU's level are translated).
 func refresh_names() -> void:
 	player_names = [Game.player_name(0), ("CPU · " + L.t(AIPlayer.NAMES[ai_level])) if vs_ai else Game.player_name(1)]
+	if not fill_in.is_empty():
+		player_names[1] = str(fill_in.get("name", "Rina"))
 	if online and net:
 		var other := str(net.opp.get("name", "")).strip_edges()
 		player_names[net_seat] = Game.player_name(0)
@@ -121,7 +132,12 @@ func local_seat() -> int:
 func xp_mode() -> String:
 	if mode != "versus":
 		return "practice"
-	return "online" if online else ("cpu" if vs_ai else "local")
+	return "online" if looks_online() else ("cpu" if vs_ai else "local")
+
+
+## An online match, or one Play Online started with a stand-in opponent: shown and played the same way.
+func looks_online() -> bool:
+	return online or not fill_in.is_empty()
 
 
 func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
@@ -130,6 +146,8 @@ func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	mode = cfg.get("mode", "practice")
 	vs_ai = cfg.get("vs_ai", false)
 	online = cfg.get("online", false)
+	fill_in = cfg.get("fill_in", {}) if vs_ai else {}
+	tutorial = cfg.has("tutorial")
 	net = cfg.get("net") as NetMatch
 	if online and net == null:
 		online = false
@@ -141,16 +159,16 @@ func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	_pick_gear()
 	# 8 minutes each for the whole match (Randy, v1.1.5). Online both phones use the standard 8 minutes, whatever
 	# either player has set for matches on their own phone.
-	var bank := float(Game.DEFAULTS["time_bank_minutes"] if online else Game.get_s("time_bank_minutes")) * 60.0
+	var bank := float(Game.DEFAULTS["time_bank_minutes"] if looks_online() else Game.get_s("time_bank_minutes")) * 60.0
 	clocks = [bank, bank]
-	current = 0
+	current = 1 if fill_in.get("they_break", false) else 0
 	shots_total = 0
 	_rack_shots0 = 0
 	_rack_t0 = Time.get_ticks_msec() / 1000.0
 	stage.rebuild_table()
 	sim = PoolSim.new(stage.table_view.geom)
 	sim.cue_clearance = true
-	sim.ball_clearance = online or bool(Game.get_s("cue_over_balls"))     # online: always, so both phones agree
+	sim.ball_clearance = looks_online() or bool(Game.get_s("cue_over_balls"))     # online: always, so both phones agree
 	sim.rail_height = stage.table_view.rail_height
 	Game.configure_sim(sim)
 	match_seed = net.match_seed if online else randi()     # both phones of an online match rack from the same seed
@@ -203,7 +221,7 @@ func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	_apply_assist()
 	set_control_scheme(Game.scheme())
 	Game.settings_changed.connect(_on_setting)
-	if not cfg.get("warmup", false):
+	if not cfg.get("warmup", false) and not tutorial:
 		Game.bump_stat("games")
 
 
@@ -214,8 +232,16 @@ func _pick_gear() -> void:
 	var mine := str(Game.get_s("cue_skin"))
 	cue_skins = [mine, mine]
 	ball_set = str(Game.get_s("ball_set"))
+	if tutorial:
+		ball_set = "balls"      # the tutorial names the balls by colour (yellow 1, blue 2, black 8): the classic set
 	stage.match_table = ""
-	if vs_ai:
+	if not fill_in.is_empty():
+		cue_skins[1] = str(Catalog.cue(str(fill_in.get("cue", "")))["id"])
+		if fill_in.get("they_break", false):
+			stage.match_table = str(Catalog.table(str(fill_in.get("table", "")))["id"])
+		else:
+			ball_set = str(Catalog.ball_set(str(fill_in.get("balls", "")))["id"])
+	elif vs_ai:
 		cue_skins[1] = AIPlayer.cue_for(ai_level, mine)
 	elif online:
 		var opp: Dictionary = net.opp
@@ -228,10 +254,12 @@ func _pick_gear() -> void:
 
 ## Online: whose table and whose balls, in words (shown when the match starts).
 func gear_note() -> String:
-	if not online:
+	if not looks_online():
 		return ""
-	var other := str(player_names[1 - net_seat])
-	return (L.t("Your table · %s's balls") % other) if net_seat == 0 else (L.t("%s's table · your balls") % other)
+	var me := local_seat()
+	var other := str(player_names[1 - me])
+	var i_break: bool = net_seat == 0 if online else not fill_in.get("they_break", false)
+	return (L.t("Your table · %s's balls") % other) if i_break else (L.t("%s's table · your balls") % other)
 
 
 func _build_views() -> void:
@@ -250,7 +278,7 @@ func _build_views() -> void:
 
 
 func _apply_assist() -> void:
-	aim_guide.assist = int(Game.get_s("aim_guide"))
+	aim_guide.assist = guide_override if guide_override >= 0 else int(Game.get_s("aim_guide"))
 
 
 func set_control_scheme(id: String) -> void:
@@ -288,11 +316,11 @@ func _on_setting(k: String) -> void:
 			for p in 2:
 				if plays_here(p) or (not online and not vs_ai):
 					cue_skins[p] = mine
-			if vs_ai and cue_skins[1] == mine:
+			if vs_ai and fill_in.is_empty() and cue_skins[1] == mine:
 				cue_skins[1] = AIPlayer.cue_for(ai_level, mine)
 			cue_view.set_skin(cue_skins[current])
 		"ball_set":
-			if not online:
+			if not looks_online():
 				ball_set = str(Game.get_s("ball_set"))
 				_build_views()
 
@@ -461,6 +489,8 @@ func _process(delta: float) -> void:
 					_tick_clock(delta)      # the other player is thinking: their clock runs here too
 				_update_remote(delta)
 			else:
+				if not fill_in.is_empty() and (_ai_result.is_empty() or _ai_think > 0.0):
+					_tick_clock(delta)      # a stand-in opponent's clock runs while it thinks, as a person's does
 				_update_ai(delta)
 		State.ROLLING:
 			_rolling_time += delta
@@ -717,6 +747,7 @@ func _on_shot_requested() -> void:
 func fire(yaw: float, power: float, offset: Vector2, elev: float) -> void:
 	undo_sim = sim.clone()
 	cue_start = cue_ball_pos()
+	last_shot = {"yaw": yaw, "power": power, "offset": offset, "elev": elev}
 	elev = maxf(elev, min_elevation(yaw, offset))
 	var mine_online := online and plays_here(current)
 	var theirs := online and not plays_here(current)
@@ -812,7 +843,7 @@ func _resolve_practice() -> void:
 	elif not jumped_this_shot.is_empty():
 		message.emit("Ball off the table — re-spotted.", "warn")
 	var left := sim.balls_on_table(PoolSim.K_OBJECT).size() + sim.balls_on_table(PoolSim.K_EIGHT).size()
-	if left == 0:
+	if left == 0 and not tutorial:
 		# a natural break: the rack-cleared screen comes up (Rack again / Menu), as a match's score screen would
 		Sfx.play("win", 0.7)
 		Game.vibrate(40)
@@ -883,12 +914,12 @@ func _resolve_versus() -> void:
 func _finish(winner: int, reason: String) -> void:
 	_set_state(State.OVER)
 	var human_won := not vs_ai or winner == 0
-	if vs_ai:
+	if vs_ai and fill_in.is_empty():
 		Game.record_ai_game(ai_level, winner == 0)
 	Sfx.play("win" if human_won else "lose", 0.9)
 	Game.vibrate(60)
 	var info := {"mode": "versus", "winner": winner, "winner_name": player_names[winner],
-		"reason": reason, "shots": shots_total, "vs_ai": vs_ai, "ai_level": ai_level, "online": online, "seat": local_seat()}
+		"reason": reason, "shots": shots_total, "vs_ai": vs_ai and fill_in.is_empty(), "ai_level": ai_level, "online": looks_online(), "seat": local_seat()}
 	if xp_track:
 		xp_track.won = winner == local_seat()
 		xp_track.match_shots = shots_total
@@ -1291,6 +1322,7 @@ func _resync_views() -> void:
 func _start_ai(ball_in_hand: bool) -> void:
 	_ai_result = {}
 	_ai_anim = 0.0
+	_ai_think = 0.0
 	_ai_from_yaw = control.yaw
 	var own := []
 	var g: int = rules.groups[current]
@@ -1315,9 +1347,20 @@ func _update_ai(delta: float) -> void:
 			_ai_result = _ai_thread.wait_to_finish()
 			_ai_thread = null
 			_ai_from_yaw = control.yaw
+			if not fill_in.is_empty():
+				# a person takes a moment to look the table over (less for the break)
+				_ai_think = randf_range(0.6, 1.5) if rules.is_break else randf_range(1.2, 3.8)
 		cue_view.aim(cue_ball_pos(), control.yaw, min_elevation(control.yaw, Vector2.ZERO), Vector2.ZERO, 0.0)
 		return
-	_ai_anim += delta
+	if _ai_think > 0.0:
+		_ai_think -= delta
+		var look := _ai_from_yaw + sin(_ai_think * 1.6) * 0.16      # the stick drifts as they consider the shot
+		control.yaw = look
+		cue_view.aim(cue_ball_pos(), look, min_elevation(look, Vector2.ZERO), Vector2.ZERO, 0.0)
+		if _ai_think <= 0.0:
+			_ai_from_yaw = control.yaw
+		return
+	_ai_anim += delta / (1.35 if not fill_in.is_empty() else 1.0)
 	var k := clampf(_ai_anim / 1.0, 0.0, 1.0)
 	var target_yaw: float = _ai_result["yaw"]
 	var y := lerp_angle(_ai_from_yaw, target_yaw, ease(k, -2.2))

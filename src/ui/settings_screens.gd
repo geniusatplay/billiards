@@ -62,7 +62,9 @@ static func toggle(parent: Control, label: String, key: String, on_change: Calla
 
 static func choice(parent: Control, label: String, key: String, options: Array, names: Array) -> Control:
 	var box := UIKit.vbox(8)
-	box.add_child(UIKit.label(label, ""))
+	var head := UIKit.label(label, "")
+	head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART     # (long words in some languages: never wider than the card)
+	box.add_child(head)
 	var row := HFlowContainer.new()
 	row.add_theme_constant_override("h_separation", 12)
 	row.add_theme_constant_override("v_separation", 10)
@@ -156,70 +158,195 @@ static func account_card(parent: Control, router: Node) -> void:
 			msg.text = Net.account_error(r))
 
 
+## ------------------------------------------------------------ v1.1.15 options-menu pieces
+## A card with an icon beside its title.
+static func card(parent: Control, title: String, icon: String, tint := UIKit.EMERALD) -> VBoxContainer:
+	var c := UIKit.panel("Card")
+	c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var v := UIKit.vbox(14)
+	c.add_child(v)
+	var head := UIKit.hbox(14)
+	head.add_child(IconGlyph.make(icon, 46, tint))
+	var t := UIKit.label(title, "H2Label")
+	t.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(t)
+	v.add_child(head)
+	parent.add_child(c)
+	return v
+
+
+## A slider with its name and value above it, and (optionally) what each end means under it.
+## fmt turns the value into the text shown; set gets each new value.
+static func big_slider(parent: Control, icon: String, label: String, value: float, lo: float, hi: float, step: float,
+		fmt: Callable, set_value: Callable, ends := []) -> HSlider:
+	var box := UIKit.vbox(2)
+	var top := UIKit.hbox(12)
+	top.add_child(IconGlyph.make(icon, 34, UIKit.MUTED))
+	var l := UIKit.label(label, "H3Label")
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.clip_text = true
+	top.add_child(l)
+	var val := UIKit.label(fmt.call(value), "AccentLabel")
+	val.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	top.add_child(val)
+	box.add_child(top)
+	var s := Widgets.TouchSlider.new()
+	s.min_value = lo
+	s.max_value = hi
+	s.step = step
+	s.value = value
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.custom_minimum_size.y = 56
+	s.name = "Slider_" + label.replace(" ", "")
+	s.value_changed.connect(func(x: float):
+		val.text = fmt.call(x)
+		set_value.call(x))
+	box.add_child(s)
+	if ends.size() == 2:
+		var er := UIKit.hbox(0)
+		var a := UIKit.label(ends[0], "SmallLabel")
+		a.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		er.add_child(a)
+		er.add_child(UIKit.label(ends[1], "SmallLabel", HORIZONTAL_ALIGNMENT_RIGHT))
+		box.add_child(er)
+	parent.add_child(box)
+	return s
+
+
+static func percent(x: float) -> String:
+	return "%d%%" % roundi(x * 100.0)
+
+
 ## ------------------------------------------------------------ Settings
+## v1.1.15 (Randy: "design a nice options menu with like music volume and game volume and world size ... the language
+## should be an option when they click the language button, I want world height to be an option"). Two columns:
+## Sound, Language, Matches, Account on the left; World and Cue & aiming on the right. The developer tools only in the
+## testing builds.
 class SettingsScreen extends MenuScreens.Screen:
 	func _ready() -> void:
-		scrim(0.72)
+		scrim(0.78)
 		header("Settings")
-		content(170, 200)
-		SettingsScreens.account_card(body, router)
-		var lang := SettingsScreens.section(body, "Language")
-		var lrow := HFlowContainer.new()
-		lrow.add_theme_constant_override("h_separation", 12)
-		lrow.add_theme_constant_override("v_separation", 10)
-		lrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var lg := ButtonGroup.new()
-		var saved := str(Game.get_s("language"))
-		for l in [["auto", "Automatic"]] + Loc.LANGS:
-			var b := UIKit.button(l[1], "ChipButton")
-			b.toggle_mode = true
-			b.button_group = lg
-			b.button_pressed = saved == l[0] or (l[0] == "auto" and not saved in Loc.codes())
-			if l[0] != "auto":
-				b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED  # each language keeps its own name
-			var code: String = l[0]
-			b.pressed.connect(func():
-				Sfx.ui("toggle")
-				Loc.set_language(code))
-			lrow.add_child(b)
-		lang.add_child(lrow)
-		var a := SettingsScreens.section(body, "Sound & feel")
-		SettingsScreens.slider(a, "Effects volume", "sfx_volume", 0, 1, 0.05)
-		SettingsScreens.slider(a, "Music volume", "music_volume", 0, 1, 0.05)
-		SettingsScreens.toggle(a, "Music during the game (menus always have music)", "music_in_game")
-		SettingsScreens.toggle(a, "Vibration (turn alerts, pots, strikes)", "haptics")
-		SettingsScreens.toggle(a, "Reduced motion", "reduced_motion")
-		var c := SettingsScreens.section(body, "Cue & aiming")
-		SettingsScreens.choice(c, "Cue control", "control_scheme", Game.SCHEMES, Game.SCHEMES.map(func(k): return Game.scheme_name(k)))
-		SettingsScreens.choice(c, "Aim guide", "aim_guide", [0, 1, 2, 3], ["Off (real pool)", "Short line", "Ghost ball", "Full prediction"])
-		SettingsScreens.slider(c, "Fine-aim sensitivity", "fine_aim_scale", 0.25, 3.0, 0.05, "%.2fx")
-		SettingsScreens.toggle(c, "Left-handed layout", "left_handed")
-		SettingsScreens.toggle(c, "Phone Cue: aim by pointing the phone", "phone_cue_follow_phone")
-		var l := SettingsScreens.section(body, "Look")
-		# only what the player owns (everything else is on the Choose Gear page, with its lock)
-		var own_cues := Catalog.CUES.filter(func(e): return Game.owns("cue", str(e["id"])))
-		var own_tables := Catalog.TABLES.filter(func(e): return Game.owns("table", str(e["id"])))
-		SettingsScreens.choice(l, "Cue", "cue_skin", Catalog.ids(own_cues), Catalog.names(own_cues))
-		SettingsScreens.choice(l, "Table", "table_style", Catalog.ids(own_tables), Catalog.names(own_tables))
+		content(170, 96)
+		var S := SettingsScreens
+		var in_match: bool = router != null and router.get("game") != null
+		var cols := UIKit.hbox(26)
+		cols.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.add_child(cols)
+		var left := UIKit.vbox(22)
+		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		left.size_flags_stretch_ratio = 1.0
+		left.name = "SettingsLeft"
+		cols.add_child(left)
+		var right := UIKit.vbox(22)
+		right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		right.size_flags_stretch_ratio = 1.1
+		right.name = "SettingsRight"
+		cols.add_child(right)
+		# ---- Sound
+		var snd := S.card(left, "Sound", "sound")
+		S.big_slider(snd, "music", "Music volume", float(Game.get_s("music_volume")), 0, 1, 0.05, S.percent,
+			func(x: float): Game.set_s("music_volume", x))
+		S.big_slider(snd, "sound", "Game sounds", float(Game.get_s("sfx_volume")), 0, 1, 0.05, S.percent,
+			func(x: float): Game.set_s("sfx_volume", x))
+		S.toggle(snd, "Music during matches", "music_in_game")
+		S.toggle(snd, "Vibration", "haptics")
+		# ---- Language: one button, the choices open over the screen
+		var lng := S.card(left, "Language", "language")
+		var lb := UIKit.button(WorldScreens.language_name(), "")
+		lb.name = "SettingsLanguage"
+		lb.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED     # (the language's own name)
+		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lb.pressed.connect(func(): router.call("open_language"))
+		lng.add_child(lb)
+		# ---- Matches
+		var m := S.card(left, "Matches", "flag")
+		S.toggle(m, "Pass-the-phone screen between turns", "pass_curtain")
+		S.toggle(m, "Reduced motion", "reduced_motion")
+		# ---- Account
+		SettingsScreens.account_card(left, router)
+		# ---- World
+		var w := S.card(right, "World", "place")
+		var now := UIKit.hbox(14)
+		var how := UIKit.label(_world_text(in_match), "MutedLabel")
+		how.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED       # (already translated, two parts)
+		how.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		how.name = "WorldNow"
+		now.add_child(how)
+		if not in_match:
+			var pw := UIKit.button("Place world", "", "place")
+			pw.name = "SettingsPlaceWorld"
+			pw.pressed.connect(func(): router.call("place_world_again"))
+			now.add_child(pw)
+		w.add_child(now)
 		var scenes := Catalog.SCENES.filter(func(e): return e.get("ready", true) and Game.owns("scene", str(e["id"])))
-		SettingsScreens.choice(l, "Scene (Studio view)", "scene", Catalog.ids(scenes), Catalog.names(scenes))
-		var own_balls := Catalog.BALLS.filter(func(e): return Game.owns("balls", str(e["id"])))
-		SettingsScreens.choice(l, "Ball set", "ball_set", Catalog.ids(own_balls), Catalog.names(own_balls))
-		var r := SettingsScreens.section(body, "Augmented reality")
-		SettingsScreens.choice(r, "View", "ar_mode", ["auto", "studio"], ["AR (walk around)", "Studio (no camera)"])
-		SettingsScreens.choice(r, "Surface", "surface", ["desk", "floor"], ["Desk (mini)", "Floor (life-size)"])
-		SettingsScreens.toggle(r, "Scene background in AR (a different one every match)", "ar_background")
-		var bg_note := UIKit.label("The scene replaces the camera picture once the table is placed. You will not see your room: play seated, or keep the floor around you clear.", "SmallLabel")
-		bg_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		r.add_child(bg_note)
-		var m := SettingsScreens.section(body, "Matches")
-		SettingsScreens.toggle(m, "Pass-the-phone screen between turns", "pass_curtain")
-		var dbg := UIKit.button("Open debug menu", "GhostButton", "debug")
-		dbg.pressed.connect(func(): router.call("open_debug"))
-		body.add_child(dbg)
+		var bg := S.choice(w, "World background (Play in place)", "scene", Catalog.ids(scenes), Catalog.names(scenes))
+		bg.name = "WorldBackground"
+		S.big_slider(w, "size", "World size", Game.world_size(), Game.WORLD_MIN, Game.WORLD_MAX, 0.01,
+			func(x: float) -> String: return L.t("Life-size") if x >= 0.995 else "%d%%" % roundi(x * 100.0),
+			func(x: float): Game.set_world_size(x), ["Mini", "Life-size"])
+		S.big_slider(w, "height", "World height", float(Game.get_s("table_height")), 0.45, 1.1, 0.01,
+			func(x: float) -> String: return "%d cm" % roundi(x * 100.0) if absf(x - 0.775) > 0.004 else L.t("Standard"),
+			func(x: float): Game.set_s("table_height", x), ["Low", "High"])
+		var wn := UIKit.label("World size and height are for the table in front of you (AR); height also sets how tall the table stands in Play in place.", "SmallLabel")
+		wn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		w.add_child(wn)
+		# ---- Cue & aiming
+		var c := S.card(right, "Cue & aiming", "cue")
+		S.choice(c, "Cue control", "control_scheme", Game.SCHEMES, Game.SCHEMES.map(func(k): return Game.scheme_name(k)))
+		S.choice(c, "Aim guide", "aim_guide", [0, 1, 2, 3], ["Off (real pool)", "Short line", "Ghost ball", "Full prediction"])
+		S.big_slider(c, "target", "Fine-aim sensitivity", float(Game.get_s("fine_aim_scale")), 0.25, 3.0, 0.05,
+			func(x: float) -> String: return "%.2f×" % x, func(x: float): Game.set_s("fine_aim_scale", x))
+		S.toggle(c, "Left-handed layout", "left_handed")
+		S.toggle(c, "Phone Cue: aim by pointing the phone", "phone_cue_follow_phone")
+		if not in_match:
+			var gear := UIKit.button("Choose Gear", "", "kit")
+			gear.pressed.connect(func(): router.call("go", "gear"))
+			c.add_child(gear)
+		# ---- developer tools (the testing builds only; Randy: "keep the debug menu for now")
+		if Game.dev_tools():
+			var dv := S.card(body, "Developer tools", "debug", UIKit.GOLD)
+			var dn := UIKit.label("Testing builds only: the store versions have no debug menu.", "SmallLabel")
+			dn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			dv.add_child(dn)
+			var dbg := UIKit.button("Open debug menu", "GhostButton", "debug")
+			dbg.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			dbg.pressed.connect(func(): router.call("open_debug"))
+			dv.add_child(dbg)
+		# v1.1.15: the privacy policy (both stores ask for it inside the app too)
+		var pp := UIKit.button("Privacy policy", "GhostButton", "lock")
+		pp.name = "PrivacyPolicy"
+		pp.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		pp.pressed.connect(func(): OS.shell_open(Net.PRIVACY_URL))
+		body.add_child(pp)
 		var credits := UIKit.label(L.t("%s v%s · © Emerald Vortex Games LLC · Fonts: Outfit and Noto Sans (SIL Open Font License). Table sound recordings: \"Pool And Billiards SFX\" by Suraj Kispotta (CC0).") % [Game.TITLE, Game.VERSION], "SmallLabel")
 		credits.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		body.add_child(credits)
+		_fit_columns.call_deferred(cols, left, right)
+
+	## Narrow screens (or long words): one column under the other. (The room is the scroll area's width: the list
+	## itself grows with what is too wide for it.)
+	func _fit_columns(cols: HBoxContainer, left: Control, right: Control) -> void:
+		if not is_inside_tree():
+			return
+		var room: float = (body.get_parent() as Control).size.x
+		if room <= 0.0 or left.get_combined_minimum_size().x + right.get_combined_minimum_size().x + 26.0 <= room - 24.0:
+			return
+		var v := UIKit.vbox(22)
+		v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.add_child(v)
+		body.move_child(v, cols.get_index())
+		for col in [right, left]:
+			cols.remove_child(col)
+			v.add_child(col)
+		cols.queue_free()
+
+	func _world_text(in_match: bool) -> String:
+		var t := "In your room (AR)" if Game.world_ready == "ar" else ("Play in place" if Game.world_ready == "studio" else "Not placed yet")
+		if in_match:
+			t = "In your room (AR)" if router.call("view_is_ar") else "Play in place"
+		return L.t("Now: %s") % L.t(t)
 
 
 ## ------------------------------------------------------------ Debug menu (overlay panel, works in-match)
@@ -295,7 +422,28 @@ class DebugMenu extends Control:
 		tb.add_child(presets)
 		S.choice(tb, "Style", "table_style", Catalog.ids(Catalog.TABLES), Catalog.names(Catalog.TABLES))
 		tb.add_child(UIKit.label("Table changes rebuild the 3D table now; the physics uses them from the next rack.", "SmallLabel"))
+		# v1.1.15 (Randy: "add a debug menu for zoom which sets the default placement backwords or forwards of the
+		# game camera for ar & play in place")
+		var cam := S.section(body, "Camera zoom")
+		S.slider(cam, "Camera distance (1 = as designed; Play in place and the AR aim view)", "cam_zoom", 0.5, 2.0, 0.05, "%.2fx")
+		S.slider(cam, "AR table placed further (+) or nearer (−) than where the phone points (m)", "ar_push", -1.0, 1.5, 0.05, "%+.2f m")
+		var cz := UIKit.button("Reset camera zoom", "ChipButton", "refresh")
+		cz.pressed.connect(func():
+			Game.set_s("cam_zoom", 1.0)
+			Game.set_s("ar_push", 0.0)
+			_refresh())
+		cam.add_child(cz)
+		# v1.1.15: the five tutorials, to try them on a phone before one is picked (testing builds only)
+		var tu := S.section(body, "Tutorial")
+		var tnames := ["The game's pick"]
+		for tv in Tutorial.VERSIONS:
+			tnames.append(str(tv["name"]))
+		S.choice(tu, "Version", "tut_version", [-1, 0, 1, 2, 3, 4], tnames)
+		var tp := UIKit.button("Play it now", "ChipButton", "play")
+		tp.pressed.connect(func(): router.call("debug_play_tutorial"))
+		tu.add_child(tp)
 		var ar := S.section(body, "AR")
+		S.toggle(ar, "Scene background in AR (a different one every match)", "ar_background")
 		S.slider(ar, "AR scale — mini", "ar_scale_desk", 0.08, 0.6, 0.01, "%.2fx")
 		S.slider(ar, "AR scale — life-size", "ar_scale_floor", 0.3, 1.3, 0.01, "%.2fx")
 		S.toggle(ar, "Floating table (hovers, no legs) instead of standing on the floor", "ar_float")

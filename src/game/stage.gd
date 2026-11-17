@@ -559,6 +559,8 @@ func _on_setting(k: String) -> void:
 		if k == "table_height" and mode == Mode.STUDIO:
 			rebuild_table()
 		_layout_table()
+	if k == "cam_zoom":
+		_layout_table()
 	if k == "camera_fov":
 		ar_cam.fov = float(Game.get_s("camera_fov"))
 	if k == "ar_float" and mode != Mode.STUDIO:
@@ -754,7 +756,7 @@ func ar_block_text() -> String:
 		"not_installed": return "AR needs Google Play Services for AR (free, from Google). Install it, then come back to the game."
 		"too_old": return "Google Play Services for AR needs an update. Update it, then come back to the game."
 		"sdk_old": return "This version of the game is too old for the AR services on this phone."
-		"permission": return "AR needs the camera. Allow camera access for Emerald Break, then try again."
+		"permission": return "AR needs one permission: the camera, to find your floor (the picture stays on your phone). Allow camera access for Emerald Break, then tap Try again, or play in place with no camera."
 		"camera": return "The camera is being used by another app. Close other camera apps, then try again."
 		"timeout": return "AR took too long to start. Try again."
 	return "AR couldn't start. Try again."
@@ -856,7 +858,13 @@ func _layout_table() -> void:
 		_hover.rotation.y = _ar_yaw
 		_sun.directional_shadow_max_distance = 3.0 if s < 0.5 else 8.0
 	var size := table_view.outer_size()
-	_want_dist = maxf(size.x, size.y) * 1.05 + 0.6
+	_want_dist = (maxf(size.x, size.y) * 1.05 + 0.6) * _zoom()
+
+
+## Developer tools → Camera zoom (v1.1.15): the camera's default distance from the table, nearer (< 1) or further
+## back (> 1), in Play in place and in the views that look past the AR table (overview, aim).
+static func _zoom() -> float:
+	return clampf(float(Game.get_s("cam_zoom")), 0.4, 2.5)
 
 
 func set_focus(ball_local: Vector2, aim_yaw: float) -> void:
@@ -1067,7 +1075,7 @@ func _update_orbit(delta: float) -> void:
 			View.OVERVIEW:
 				_want_target = root_xf * Vector3(0, 0, 0)
 				_want_pitch = deg_to_rad(42.0)
-				_want_dist = (maxf(size.x * 0.62, size.y * 1.0) + 0.75) * s
+				_want_dist = (maxf(size.x * 0.62, size.y * 1.0) + 0.75) * s * _zoom()
 				if _idle_spin:
 					_want_yaw += delta * 0.12
 				else:
@@ -1077,7 +1085,7 @@ func _update_orbit(delta: float) -> void:
 				var dir_w := table_root.global_basis * Vector3(cos(_aim_yaw), 0.0, sin(_aim_yaw))
 				_want_yaw = _closest_angle(_want_yaw, atan2(-dir_w.x, -dir_w.z))
 				_want_pitch = deg_to_rad(17.0)
-				_want_dist = 0.95 * s
+				_want_dist = 0.95 * s * _zoom()
 			View.TOP:
 				_top_frame()
 	var k := 1.0 - exp(-delta * 6.0)
@@ -1172,8 +1180,22 @@ func _update_preview() -> void:
 		p = _plane_hit(centre, gy)
 	_preview_ok = p != null
 	if p != null:
-		_ar_pos = p
+		_ar_pos = p + _push_offset()
 		_layout_table()
+
+
+## Developer tools → AR placement (v1.1.15): the table goes down this many metres further away from (+) or nearer to
+## (-) the spot the phone points at, along the floor.
+func _push_offset() -> Vector3:
+	var push := clampf(float(Game.get_s("ar_push")), -2.0, 3.0)
+	if absf(push) < 0.001:
+		return Vector3.ZERO
+	var f := -ar_cam.global_basis.z
+	f.y = 0.0
+	if f.length() < 0.2:
+		f = ar_cam.global_basis.y     # looking straight down: the phone's top edge
+		f.y = 0.0
+	return f.normalized() * push if f.length() > 1e-3 else Vector3.ZERO
 
 
 ## Floating preview (Debug → AR → Floating table): hovers in front of you, a bit below eye level.
@@ -1187,7 +1209,7 @@ func _update_float_preview() -> void:
 		return
 	f = f.normalized()
 	var mini: bool = Game.get_s("surface") != "floor"
-	var d := float(Game.get_s("float_dist_desk" if mini else "float_dist_floor"))
+	var d := maxf(0.2, float(Game.get_s("float_dist_desk" if mini else "float_dist_floor")) + clampf(float(Game.get_s("ar_push")), -2.0, 3.0))
 	var drop := float(Game.get_s("float_drop_desk" if mini else "float_drop_floor"))
 	var cp := ar_cam.global_position
 	_ar_pos = Vector3(cp.x + f.x * d, cp.y - drop, cp.z + f.z * d)

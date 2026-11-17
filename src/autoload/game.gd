@@ -8,7 +8,7 @@ signal progress_changed          # XP, level, owned items or unopened packages c
 
 const TITLE := "Emerald Break"
 const STUDIO := "Emerald Vortex Games"
-const VERSION := "1.1.14"
+const VERSION := "1.1.15"
 const ALT_TITLES := ["Pocket Horizon", "Felt Realm", "Gemshot Billiards", "Cue Vortex"]
 const SAVE_PATH := "user://emerald_break_save.json"
 
@@ -57,8 +57,48 @@ const DEFAULTS := {
 	"cue_over_balls": true,
 	# the gear drawer in matches (Randy, 11 Nov: a testing tool, gone mid-game once released; never online)
 	"gear_drawer": true,
+	# v1.1.15 developer tools: the camera's default distance in Play in place / the aim view (1 = as designed),
+	# and where an AR table goes down: metres further from (+) or nearer to (-) the spot the phone points at
+	"cam_zoom": 1.0, "ar_push": 0.0, "tut_version": -1,
+	# v1.1.15: when the share popup was last shown (unix seconds); the tutorial was started by itself once
+	"share_last": 0, "tutorial_offered": false,
 	"onboarded": {}, "first_run": true,
 }
+
+## v1.1.15 "World": how the table appears this launch (never saved: after a restart the main menu offers
+## "Place world" again). "" = not chosen yet, "ar" = put down in the room (in front of me), "studio" = Play in place.
+var world_ready := ""
+## World size (walk-around AR): Mini sits on a desk, 1.0 is a real 8-ft table on the floor.
+const WORLD_MINI := 0.28
+const WORLD_MIN := 0.12
+const WORLD_MAX := 1.0
+const WORLD_FLOOR_FROM := 0.55     # from this size up the table stands on the floor (life-size placing hints)
+
+
+## Store builds (export feature "store") have no developer tools: no debug menu, no 7 taps on the version, no gear
+## drawer in matches, no frame-rate counter, nothing unlocked for free. Every other build (the testing APK, the
+## editor, the automated checks) keeps them.
+static func dev_tools() -> bool:
+	return not (_store_build or pretend_store)
+
+
+static var _store_build := OS.has_feature("store")     # (asked once: get_s() asks dev_tools() all the time)
+## (the automated checks look at the store build's screens with this)
+static var pretend_store := false
+
+
+func world_size() -> float:
+	return float(get_s("ar_scale_floor")) if get_s("surface") == "floor" else float(get_s("ar_scale_desk"))
+
+
+func set_world_size(v: float) -> void:
+	v = clampf(v, WORLD_MIN, WORLD_MAX)
+	var on_floor := v >= WORLD_FLOOR_FROM
+	settings["ar_scale_floor" if on_floor else "ar_scale_desk"] = v
+	if get_s("surface") != ("floor" if on_floor else "desk"):
+		settings["surface"] = "floor" if on_floor else "desk"
+	settings_changed.emit("surface")      # (the stage reads the size and the surface together)
+	request_save()
 
 var settings: Dictionary = {}
 var phys: Dictionary = {}
@@ -112,7 +152,16 @@ func store_player_name(i: int, text: String) -> void:
 	set_s("p%d_name" % (i + 1), DEFAULT_NAMES[i] if t == "" or t == L.t(DEFAULT_NAMES[i]) else t)
 
 
+## What the developer options are in a store build, whatever was saved (v1.1.15): nothing unlocked for free, no
+## counters, no gear drawer, no advert stand-ins, no AR scene background or floating table, the camera as designed.
+const RELEASE_VALUES := {"unlock_all": false, "ad_standins": false, "fps_counter": false, "show_fps": false,
+	"gear_drawer": false, "ar_background": false, "ar_float": false, "cam_zoom": 1.0, "ar_push": 0.0,
+	"tut_version": -1}
+
+
 func get_s(key: String, fallback = null):
+	if RELEASE_VALUES.has(key) and not dev_tools():
+		return RELEASE_VALUES[key]
 	if settings.has(key):
 		return settings[key]
 	return DEFAULTS.get(key, fallback)
@@ -144,8 +193,11 @@ func reset_physics() -> void:
 	request_save()
 
 
-func reset_table() -> void:
+## keep_height: World height stays as the player set it (online matches reset only what the game plays on).
+func reset_table(keep_height := false) -> void:
 	for k in ["table_length", "table_width", "table_height", "table_height_desk", "rail_height", "pocket_scale", "ball_radius", "show_legs"]:
+		if keep_height and k in ["table_height", "table_height_desk", "show_legs"]:
+			continue
 		settings[k] = DEFAULTS[k]
 	table_changed.emit()
 	request_save()
@@ -332,6 +384,68 @@ func cut_chest() -> void:
 	progress["chest_at"] = mini(int(progress.get("chest_at", 0)), int(progress.get("chest_from", 0)) + XP.CHEST_WAIT_AD)
 	progress_changed.emit()
 	request_save()
+
+
+# ------------------------------------------------------------------ gift chests (v1.1.15)
+## XP chests given for finishing the tutorial or for sharing the game: they open at once, with no timer and no
+## advert, and leave the 6-hour chest alone. progress["gifts"]: why each one waiting was given ("tutorial", "share").
+func gift_chests() -> Array:
+	return progress.get("gifts", [])
+
+
+func give_gift_chest(reason: String) -> void:
+	var g: Array = gift_chests().duplicate()
+	if g.size() >= 5:
+		return
+	g.append(reason)
+	progress["gifts"] = g
+	progress_changed.emit()
+	request_save()
+
+
+## Opens the first gift chest: {"xp": amount, "gain": add_xp's answer, "reason": why it was given}, or {}.
+func open_gift_chest() -> Dictionary:
+	var g: Array = gift_chests().duplicate()
+	if g.is_empty() or level() >= XP.MAX_LEVEL:
+		return {}
+	var why := str(g.pop_front())
+	progress["gifts"] = g
+	var amount := chest_xp()
+	var gain := add_xp(amount)
+	progress_changed.emit()
+	request_save()
+	return {"xp": amount, "gain": gain, "reason": why}
+
+
+## The tutorial was played to the end (kept with the account, so it pays once per player).
+func tutorial_done() -> bool:
+	return bool(progress.get("tutorial", false))
+
+
+func finish_tutorial() -> bool:
+	if tutorial_done():
+		return false
+	progress["tutorial"] = true
+	give_gift_chest("tutorial")
+	return true
+
+
+## Sharing the game gives a gift chest once a day (Randy: "a share with friends incentive to receive a free chest";
+## the stores allow a reward for sharing, never for a friend installing, so nothing about the friend is tracked).
+func today() -> String:
+	return Time.get_date_string_from_unix_time(now() + int(Time.get_time_zone_from_system().get("bias", 0)) * 60)
+
+
+func share_chest_waiting() -> bool:
+	return str(progress.get("share_day", "")) != today()
+
+
+func claim_share_chest() -> bool:
+	if not share_chest_waiting():
+		return false
+	progress["share_day"] = today()
+	give_gift_chest("share")
+	return true
 
 
 ## Opens the XP chest: {"xp": amount, "gain": add_xp's answer}, or {} while it is not ready.

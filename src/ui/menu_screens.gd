@@ -81,11 +81,26 @@ class MainMenu extends Screen:
 		var gem := IconGlyph.make("gem", 72, UIKit.EMERALD)
 		brand.add_child(gem)
 		brand.add_child(UIKit.label("EMERALD VORTEX GAMES", "AccentLabel"))
+		# v1.1.15: the language button (Randy: "the language should be an option when they click the language button"),
+		# at the end of the studio's line, clear of the button column in every language
+		brand.add_child(UIKit.spacer())
+		var lg := UIKit.icon_button("language", 76, "Language")
+		lg.name = "MenuLanguage"
+		lg.pressed.connect(func(): router.call("open_language"))
+		brand.add_child(lg)
 		left.add_child(brand)
 		var title := UIKit.label(Game.TITLE.to_upper(), "TitleLabel")
 		title.add_theme_constant_override("outline_size", 0)
 		left.add_child(title)
-		var tag := UIKit.label("Augmented-reality 8-ball pool", "MutedLabel")
+		# v1.1.15: the game's full name, as on the loading screen and in the stores ("Emerald Break: AR Pool Game")
+		var tag := UIKit.label("AR POOL GAME", "H3Label")
+		tag.name = "MenuSubtitle"
+		tag.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED      # (part of the name)
+		var spaced := FontVariation.new()
+		spaced.base_font = UIKit.font(700)
+		spaced.spacing_glyph = 7
+		tag.add_theme_font_override("font", spaced)
+		tag.add_theme_color_override("font_color", Color(UIKit.TEXT, 0.72))
 		left.add_child(tag)
 		left.add_child(UIKit.spacer(false))
 		# level and XP
@@ -115,17 +130,39 @@ class MainMenu extends Screen:
 		col.custom_minimum_size = Vector2(520, 0)
 		col.name = "MenuColumn"
 		add_child(col)
+		# v1.1.15: the tutorial until it has been played to the end ("the play tutorial button should be above at the
+		# main menu for anyone who hasnt completed it (skipping it doesnt count)"), and Place world after each start
+		# ("if they restarted the game they should have the option at the main menu under tutorial. to place world"):
+		# side by side in one compact row, so the column still fits above the chest
+		var setup := UIKit.hbox(12)
+		setup.name = "MenuSetupRow"
+		if not Game.tutorial_done():
+			var tb := _compact(UIKit.button("Play tutorial", "", "school"))
+			tb.name = "MenuTutorial"
+			(tb.get_meta("icon_glyph") as IconGlyph).color = UIKit.GOLD
+			tb.add_theme_stylebox_override("normal", UIKit.box(Color(0.16, 0.13, 0.05, 0.92), 24, 2, Color(UIKit.GOLD, 0.7), Vector4(30 + 38 + 8, 12, 24, 12)))
+			tb.pressed.connect(func(): router.call("play", "tutorial"))
+			setup.add_child(tb)
+		if Game.world_ready == "":
+			var pw := _compact(UIKit.button("Place world", "", "place"))
+			pw.name = "MenuPlaceWorld"
+			(pw.get_meta("icon_glyph") as IconGlyph).color = UIKit.EMERALD
+			pw.pressed.connect(func(): router.call("place_world_again"))
+			setup.add_child(pw)
+		if setup.get_child_count() > 0:
+			col.add_child(setup)
+		# every way to play goes through "Place world" first when the table hasn't been placed yet (router.play)
 		var online := UIKit.button("Play Online", "PrimaryButton", "globe", 520)
-		online.pressed.connect(func(): router.call("go", "online"))
+		online.pressed.connect(func(): router.call("play", "online"))
 		col.add_child(online)
 		var vs := UIKit.button("Local Turn Based", "", "users", 520)
-		vs.pressed.connect(func(): router.call("go", "pass_play"))
+		vs.pressed.connect(func(): router.call("play", "pass_play"))
 		col.add_child(vs)
 		var play := UIKit.button("Play VS CPU", "", "robot", 520)
-		play.pressed.connect(func(): router.call("go", "vs_ai"))
+		play.pressed.connect(func(): router.call("play", "vs_ai"))
 		col.add_child(play)
 		var pr := UIKit.button("Practice", "", "practice", 520)
-		pr.pressed.connect(func(): router.call("start_match", {"mode": "practice"}))
+		pr.pressed.connect(func(): router.call("play", "practice"))
 		col.add_child(pr)
 		var cc := UIKit.button("Cue Controls", "", "cue", 520)
 		cc.pressed.connect(func(): router.call("go", "controls"))
@@ -140,14 +177,9 @@ class MainMenu extends Screen:
 		row.add_child(st)
 		row.add_child(hp)
 		col.add_child(row)
-		var ar_chip := UIKit.button(_ar_text(), "ChipButton", "camera")
-		ar_chip.pressed.connect(func():
-			Game.set_s("ar_mode", "studio" if Game.get_s("ar_mode") != "studio" else "auto")
-			ar_chip.text = _ar_text())
-		col.add_child(ar_chip)
 		var ver := Button.new()
 		ver.flat = true
-		ver.text = "v%s · tap 7× for developer tools" % Game.VERSION if Game.get_s("first_run") else "v%s" % Game.VERSION
+		ver.text = "v%s · tap 7× for developer tools" % Game.VERSION if Game.get_s("first_run") and Game.dev_tools() else "v%s" % Game.VERSION
 		ver.add_theme_font_size_override("font_size", 22)
 		ver.add_theme_color_override("font_color", Color(UIKit.MUTED, 0.6))
 		ver.focus_mode = Control.FOCUS_NONE
@@ -155,7 +187,7 @@ class MainMenu extends Screen:
 		ver.position = Vector2(110, -70)
 		ver.pressed.connect(func():
 			_taps += 1
-			if _taps >= 7:
+			if _taps >= 7 and Game.dev_tools():
 				_taps = 0
 				router.call("open_debug"))
 		add_child(ver)
@@ -181,6 +213,13 @@ class MainMenu extends Screen:
 
 	var _xp_bar: RewardScreens.XpBar
 	var _corner: HBoxContainer
+
+	## A smaller button for the setup row (two share the column's width).
+	func _compact(b: Button) -> Button:
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.custom_minimum_size.y = 84
+		b.add_theme_font_size_override("font_size", 28)
+		return b
 
 	func _on_progress() -> void:
 		_xp_bar.set_xp(float(Game.xp()))
@@ -249,13 +288,13 @@ class MainMenu extends Screen:
 		pk.pressed.connect(func(): router.call("go", "packages"))
 		_corner.add_child(pk)
 		# the times count down; the corner is rebuilt when the chest or a package becomes ready
-		var chest_was := Game.chest_ready()
+		var chest_was := Game.chest_ready() or not Game.gift_chests().is_empty()
 		var pk_was := Game.packages_ready()
 		var tick := Timer.new()
 		tick.wait_time = 1.0
 		tick.autostart = true
 		tick.timeout.connect(func():
-			if Game.chest_ready() != chest_was or Game.packages_ready() != pk_was:
+			if (Game.chest_ready() or not Game.gift_chests().is_empty()) != chest_was or Game.packages_ready() != pk_was:
 				_fill_corner()
 				return
 			var ct: Label = _corner.find_child("ChestTime", true, false)
@@ -268,7 +307,7 @@ class MainMenu extends Screen:
 
 	## The XP chest in the menu's corner: the chest itself, and "Ready!" or the time left.
 	func _chest_button() -> Button:
-		var ready := Game.chest_ready()
+		var ready := Game.chest_ready() or not Game.gift_chests().is_empty()     # (v1.1.15: gift chests open at once)
 		var b := Button.new()
 		b.focus_mode = Control.FOCUS_NONE
 		b.custom_minimum_size = Vector2(360, 170)
@@ -315,10 +354,6 @@ class MainMenu extends Screen:
 		col.custom_minimum_size.x = minf(520.0, room)
 		col.offset_left = col.offset_right - maxf(col.custom_minimum_size.x, col.get_combined_minimum_size().x)
 
-	func _ar_text() -> String:
-		if Game.get_s("ar_mode") == "studio":
-			return "View: Studio (no camera)"
-		return "View: AR (table in your room)"
 
 
 ## ------------------------------------------------------------ match setup (vs AI or pass & play)
@@ -335,7 +370,10 @@ class MatchSetup extends Screen:
 
 	func _ready() -> void:
 		scrim(0.6)
-		header("Play VS CPU" if vs_ai else "Local Turn Based")
+		var hd := header("Play VS CPU" if vs_ai else "Local Turn Based")
+		# v1.1.15: put the table down again (or switch to Play in place) right here, always in sight
+		hd.add_child(UIKit.spacer())
+		hd.add_child(WorldScreens.world_button(router))
 		content(170, 300)
 		_ai_level = int(Game.get_s("ai_level"))
 		var card := UIKit.panel("Card")
@@ -380,6 +418,9 @@ class MatchSetup extends Screen:
 		body.add_child(cc)
 
 	func _start() -> void:
+		if Game.world_ready == "":
+			router.call("place_world_again")
+			return
 		Game.store_player_name(0, _name1.text)
 		Game.store_player_name(1, _name2.text)
 		Game.set_s("ai_level", _ai_level)
@@ -456,21 +497,28 @@ class ControlsScreen extends Screen:
 		var tr := UIKit.button("Try in practice", "GhostButton", "practice")
 		tr.pressed.connect(func():
 			Game.set_s("control_scheme", id)
-			router.call("start_match", {"mode": "practice"}))
+			router.call("play", "practice"))
 		v.add_child(tr)
 		return p
 
 
 ## ------------------------------------------------------------ play online (matchmaking arrives with the game server)
 class OnlineScreen extends Screen:
+	## v1.1.15: after this long without an opponent, the match starts against a stand-in (see FillIn)
+	const SEARCH_SECONDS := 60.0
+	var search_seconds := SEARCH_SECONDS      # (tests shorten it)
 	var _status: Label
 	var _find: Button
 	var _searching := false
 	var _t0 := 0
+	var _world_b: Button
 
 	func _ready() -> void:
 		scrim(0.6)
-		header("Play Online")
+		var hd := header("Play Online")
+		_world_b = WorldScreens.world_button(router)
+		hd.add_child(UIKit.spacer())
+		hd.add_child(_world_b)
 		content(170, 300)
 		var card := UIKit.panel("Card")
 		var v := UIKit.vbox(18)
@@ -497,6 +545,8 @@ class OnlineScreen extends Screen:
 				router.call("go", "account")     # v1.1.13: online play is with an account
 			elif _searching:
 				_cancel()
+			elif Game.world_ready == "":
+				router.call("place_world_again")
 			else:
 				_search())
 		if not Net.signed_in():
@@ -526,6 +576,8 @@ class OnlineScreen extends Screen:
 		_searching = true
 		_find.text = "Cancel"
 		_find.icon = null
+		if _world_b:
+			_world_b.disabled = true       # (the world can't change while looking for a match)
 		_say("Checking your connection…")
 		if not await Net.ensure_player():
 			return _failed()
@@ -554,7 +606,10 @@ class OnlineScreen extends Screen:
 				Sfx.play("turn_chime", 0.9)
 				router.call("start_match", {"mode": "versus", "online": true, "net": m})
 				return
-			var line := L.t("Looking for an opponent… %d s") % int((Time.get_ticks_msec() - _t0) / 1000.0)
+			var waited := (Time.get_ticks_msec() - _t0) / 1000.0
+			if waited >= search_seconds:
+				return _stand_in()
+			var line := L.t("Looking for an opponent… %d s") % int(waited)
 			if int(r.get("other_ver", 0)) > 0:
 				# someone is looking too, on a version that can't play this one (v1.1.13: was the reason two
 				# phones never met)
@@ -562,14 +617,26 @@ class OnlineScreen extends Screen:
 			_say(line)
 			await get_tree().create_timer(1.5).timeout
 
+	## Nobody came within a minute: a match against a stand-in opponent, shown and paid like an online one.
+	func _stand_in() -> void:
+		_searching = false
+		Net.api("leave", Net.creds(), "poll")
+		var f := FillIn.make(Game.player_name(0), Game.level())
+		Sfx.play("turn_chime", 0.9)
+		router.call("start_match", {"mode": "versus", "vs_ai": true, "ai_level": int(f["ai_level"]), "fill_in": f})
+
 	func _failed() -> void:
 		_searching = false
+		if _world_b:
+			_world_b.disabled = false
 		if is_inside_tree():
 			_find.text = "Find a match"
 			_say("The game server cannot be reached. Check your internet connection and try again.")
 
 	func _cancel() -> void:
 		_searching = false
+		if _world_b:
+			_world_b.disabled = false
 		_find.text = "Find a match"
 		_say("Play 8-ball against another player.")
 		if Net.registered():
@@ -589,11 +656,11 @@ class HelpScreen extends Screen:
 		header("How to Play")
 		content(170, 200)
 		var sections := [
-			["Placing the table (AR)", "Choose Mini (on a desk) or Life-size (on the floor). Point the phone at the surface and sweep it slowly side to side until \"Floor found\" appears and the table stands there, then tap Place. The table stays fixed in your room: walk all the way around it, lean in, crouch. The move button lets you drag, pinch and twist the table; the recenter button places it again.\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in the Studio view instead."],
+			["Placing the world", "Place world (on the main menu, and on the screen before a match) offers two ways. In front of me: point the phone at the floor or a desk and sweep it slowly until the table appears, then tap Place. It stays put in your room: walk all the way around it, lean in, crouch. Settings → World sets its size and height. Play in place: no camera, the table in its own world (Settings → World background).\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in place instead."],
 			["Aiming", "Like real pool, only the cue shows your aim. If you want help, Settings → Aim guide adds a short line, a ghost ball, or a full prediction."],
 			["Spin & elevation", "Drag the dot on the cue-ball pad: low = draw (comes back), high = follow, sides = english (changes rebound angles; the cue ball squirts slightly away from the side you hit).\nThe elevation slider raises the cue butt: 5-15° with side spin swerves the ball, 25-50° with a firm stroke makes the cue ball JUMP over blockers, and 60-75° with side spin bends it around balls (massé). Hit a jump too hard and the ball flies off the table."],
 			["Balls off the table", "A ball that leaves the table is a foul. Object balls are re-spotted on the foot spot; the cue ball gives your opponent ball in hand; jumping the 8 off the table loses the game."],
-			["Turns & clocks", "Every player has a 5-minute time bank for the whole match. It only runs while you are aiming. You'll hear a chime, feel a buzz and see a banner when it's your turn. Run out and you lose the frame."],
+			["Turns & clocks", "Every player has an 8-minute time bank for the whole match. It only runs while you are aiming. You'll hear a chime, feel a buzz and see a banner when it's your turn. Run out and you lose the frame."],
 			["8-ball rules", "Break, then pot a ball to claim solids or stripes. Hit your own group first and make a ball or a cushion contact after hitting it. Fouls give your opponent ball in hand. Sink the 8 last — too early, or with a scratch, loses."],
 			["Opponents", "The Easy CPU misses often and only takes straight pots. Medium plays banks, spin and safeties. Hard aims precisely and plays position for its next shot."],
 		]
@@ -603,7 +670,7 @@ class HelpScreen extends Screen:
 			card.add_child(v)
 			v.add_child(UIKit.label(s[0], "H2Label"))
 			var t := UIKit.label(s[1], "MutedLabel")
-			if s[0] == "Placing the table (AR)" and OS.get_name() == "iOS":
+			if s[0] == "Placing the world" and OS.get_name() == "iOS":
 				t.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED   # already translated, with the ARKit line
 				t.text = ARCoreBridge.ios_help(s[1])
 			t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

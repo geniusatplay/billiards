@@ -553,6 +553,40 @@ bool EmeraldAR::openAppSettings() {
 	return [EAR_HOST openAppSettings];
 }
 
+// v1.1.15: the iPhone's share sheet with a short text and the game's link (nothing is tracked).
+bool EmeraldAR::share(const String &p_text, const String &p_title) {
+	NSString *text = [NSString stringWithUTF8String:p_text.utf8().get_data()];
+	(void)p_title;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		UIViewController *top = nil;
+		for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+			if ([scene isKindOfClass:[UIWindowScene class]]) {
+				for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+					if (w.isKeyWindow) {
+						top = w.rootViewController;
+					}
+				}
+			}
+		}
+		while (top && top.presentedViewController) {
+			top = top.presentedViewController;
+		}
+		if (!top || !text) {
+			return;
+		}
+		UIActivityViewController *sheet = [[UIActivityViewController alloc] initWithActivityItems:@[ text ] applicationActivities:nil];
+		// iPad: the sheet is a popover and needs a place to point at
+		if (sheet.popoverPresentationController) {
+			sheet.popoverPresentationController.sourceView = top.view;
+			CGRect b = top.view.bounds;
+			sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(b), CGRectGetMidY(b), 1, 1);
+			sheet.popoverPresentationController.permittedArrowDirections = 0;
+		}
+		[top presentViewController:sheet animated:YES completion:nil];
+	});
+	return text != nil;
+}
+
 String EmeraldAR::getLastError() {
 	return ear_str([EAR_HOST lastError]);
 }
@@ -603,6 +637,7 @@ void EmeraldAR::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("availability"), &EmeraldAR::availability);
 	ClassDB::bind_method(D_METHOD("requestInstall"), &EmeraldAR::requestInstall);
 	ClassDB::bind_method(D_METHOD("openAppSettings"), &EmeraldAR::openAppSettings);
+	ClassDB::bind_method(D_METHOD("share", "text", "title"), &EmeraldAR::share);
 	ClassDB::bind_method(D_METHOD("getLastError"), &EmeraldAR::getLastError);
 	ClassDB::bind_method(D_METHOD("getInfo"), &EmeraldAR::getInfo);
 	ClassDB::bind_method(D_METHOD("start", "w", "h"), &EmeraldAR::start);

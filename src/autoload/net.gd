@@ -35,6 +35,14 @@ func _ready() -> void:
 	Game.progress_changed.connect(func(): _save_in = 4.0)
 	if registered() and not OS.get_cmdline_user_args().has("--offline"):
 		_pull_when_drawn()
+	if not OS.get_cmdline_user_args().has("--offline"):
+		_version_when_drawn()
+
+
+func _version_when_drawn() -> void:
+	for i in 4:
+		await RenderingServer.frame_post_draw
+	check_version()
 
 
 ## The first frames of a launch can take seconds (the table's shaders are built then). A request started before
@@ -96,6 +104,80 @@ func api(action: String, body: Dictionary = {}, lane := "") -> Dictionary:
 			Game.progress.erase("email")
 			Game.request_save()
 	return parsed
+
+
+# ---------------------------------------------------------------- store updates (v1.1.15)
+## Randy: "please make sure if there is a needed update, the people have to update it from the store". The server
+## keeps one small file (server/eb/version.json) that says which version is the oldest still allowed, and where each
+## store page is. Changing "min" there makes every older copy of the game ask for the update.
+const VERSION_URL := "https://emeraldvortexgames.com/eb/version.json"
+const PLAY_ID := "com.emeraldvortexgames.emeraldbreak"
+const PLAY_URL := "https://play.google.com/store/apps/details?id=" + PLAY_ID
+## The share link (Randy's landing page: it sends phones to their store, computers see both).
+const SHARE_URL := "https://emeraldvortexgames.com/eb/get/"
+const PRIVACY_URL := "https://emeraldvortexgames.com/eb/privacy/"
+var store_info := {}        # version.json as last read ({} = not read)
+var update_needed := false
+signal update_required
+
+## Reads version.json (a fresh copy each time, never a cached one). Offline or unreadable: nothing changes.
+func check_version() -> void:
+	var info: Dictionary = {}
+	if fake != null and fake.has_method("version_info"):
+		await get_tree().process_frame
+		info = fake.version_info()
+	else:
+		if OS.get_cmdline_user_args().has("--offline") or DisplayServer.get_name() == "headless":
+			return
+		var req := HTTPRequest.new()
+		req.timeout = 8.0
+		add_child(req)
+		if req.request(VERSION_URL + "?t=%d" % int(Time.get_unix_time_from_system())) != OK:
+			req.queue_free()
+			return
+		var res: Array = await req.request_completed
+		req.queue_free()
+		if int(res[0]) != HTTPRequest.RESULT_SUCCESS or int(res[1]) != 200:
+			return
+		var parsed = JSON.parse_string((res[3] as PackedByteArray).get_string_from_utf8())
+		if typeof(parsed) != TYPE_DICTIONARY:
+			return
+		info = parsed
+	store_info = info
+	if version_less(Game.VERSION, str(info.get("min", "0"))):
+		update_needed = true
+		update_required.emit()
+
+
+## "1.1.9" < "1.1.15" (number by number).
+static func version_less(a: String, b: String) -> bool:
+	var pa := a.split(".")
+	var pb := b.split(".")
+	for i in maxi(pa.size(), pb.size()):
+		var x := int(pa[i]) if i < pa.size() else 0
+		var y := int(pb[i]) if i < pb.size() else 0
+		if x != y:
+			return x < y
+	return false
+
+
+## The game's page in this phone's store: the Play Store app on Android, the App Store on iPhone (its address comes
+## from version.json once the App Store has given the game its number), the web page anywhere else.
+func store_url() -> String:
+	match OS.get_name():
+		"Android":
+			return "market://details?id=" + PLAY_ID
+		"iOS":
+			return str(store_info.get("ios", ""))
+	return str(store_info.get("web", SHARE_URL))
+
+
+func open_store() -> void:
+	var u := store_url()
+	if u == "":
+		u = SHARE_URL
+	if OS.shell_open(u) != OK and OS.get_name() == "Android":
+		OS.shell_open(PLAY_URL)       # (no Play Store app: the web page)
 
 
 # ---------------------------------------------------------------- kept-open connections (v1.1.14)
@@ -318,7 +400,7 @@ func ensure_player() -> bool:
 
 
 ## The parts of Game.progress kept on the server.
-const SYNCED := ["xp", "owned", "packages", "pk_time", "chest_at", "chest_from", "chest_cut", "matches", "curve"]
+const SYNCED := ["xp", "owned", "packages", "pk_time", "chest_at", "chest_from", "chest_cut", "matches", "curve", "tutorial", "gifts", "share_day"]
 
 
 ## Copies the progress to the server (a few seconds after it last changed).
@@ -343,6 +425,13 @@ func pull_progress() -> void:
 	if not r.get("ok", false) or typeof(r.get("progress")) != TYPE_DICTIONARY:
 		return
 	var p: Dictionary = r["progress"]
+	# v1.1.15: what pays once per player is kept whichever copy is ahead (the tutorial's chest, today's share chest)
+	if bool(p.get("tutorial", false)) and not Game.tutorial_done():
+		Game.progress["tutorial"] = true
+		Game.request_save()
+	if str(p.get("share_day", "")) > str(Game.progress.get("share_day", "")):
+		Game.progress["share_day"] = str(p["share_day"])
+		Game.request_save()
 	if int(p.get("xp", 0)) > Game.xp():
 		Game.progress.erase("curve")              # a copy saved by a version before v1.1.7 has none
 		for k in SYNCED:

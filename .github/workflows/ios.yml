@@ -11,6 +11,10 @@ on:
         description: "Also run the game's ios_check test on an iPhone simulator (slow: no GPU in the cloud)"
         type: boolean
         default: false
+      store:
+        description: "The store version (no debug menu, no developer options), published as ios-store-latest"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -58,6 +62,8 @@ jobs:
         run: bash ios_plugin/ci.sh godot
 
       - name: Export the Xcode project
+        env:
+          EB_STORE: ${{ (github.event_name == 'workflow_dispatch' && inputs.store) && '1' || '' }}
         run: bash ios_plugin/ci.sh export
 
       - name: Build the app (unsigned .ipa)
@@ -71,17 +77,19 @@ jobs:
           path: build/ios/xcodebuild.log
           if-no-files-found: ignore
 
-      - name: Publish as the "ios-latest" release
+      - name: Publish as the "ios-latest" release (the store version as "ios-store-latest")
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ (github.event_name == 'workflow_dispatch' && inputs.store) && 'ios-store-latest' || 'ios-latest' }}
+          KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.store) && 'store version, ' || '' }}
         run: |
           IPA=$(ls build/ios/EmeraldBreak-*.ipa)
           VER=$(basename "$IPA" .ipa | sed 's/EmeraldBreak-//')
           cp "$IPA" build/ios/EmeraldBreak.ipa
-          gh release delete ios-latest --yes --cleanup-tag || true
-          gh release create ios-latest "$IPA" build/ios/EmeraldBreak.ipa \
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" "$IPA" build/ios/EmeraldBreak.ipa \
             --target "$GITHUB_SHA" --prerelease \
-            --title "Emerald Break $VER for iPhone (unsigned, for Sideloadly)" \
+            --title "Emerald Break $VER for iPhone (${KIND}unsigned, for Sideloadly)" \
             --notes "Built from ${GITHUB_SHA::7}. Install with Sideloadly: drag EmeraldBreak.ipa in, sign in with your Apple ID, Start. With a free Apple ID the app runs for 7 days, then install it again."
 
       - name: Test on an iPhone simulator (plugin, safe area, AR start-up)

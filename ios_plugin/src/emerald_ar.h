@@ -33,6 +33,7 @@ public:
 	String availability();
 	bool requestInstall();
 	bool openAppSettings();
+	bool share(const String &p_text, const String &p_title);
 	String getLastError();
 	String getInfo();
 	bool start(int p_w, int p_h);

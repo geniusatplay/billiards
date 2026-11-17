@@ -394,12 +394,20 @@ class ChestScreen extends MenuScreens.Screen:
 
 	func _refresh() -> void:
 		var top := Game.level() >= XP.MAX_LEVEL
-		var ready := Game.chest_ready()
+		var gifts := Game.gift_chests().size()
+		var ready := Game.chest_ready() or gifts > 0
 		_sub.text = L.t("Half a level of XP: +%d XP at level %d") % [Game.chest_xp(), Game.level()] if not top else L.t("You are at the top level.")
 		_open_btn.visible = ready and not top
 		_ad_btn.visible = false
 		if top:
 			_status.text = ""
+		elif gifts > 0:
+			# v1.1.15: a gift chest (the tutorial, sharing): open now, no timer, no advert
+			var why := str(Game.gift_chests()[0])
+			_status.text = L.t("A gift for sharing the game: open it now!") if why == "share" else L.t("A gift for finishing the tutorial: open it now!")
+			if gifts > 1:
+				_status.text += "  ×%d" % gifts
+			_status.add_theme_color_override("font_color", PackageView.XP_GOLD)
 		elif ready:
 			_status.text = L.t("Ready to open!")
 			_status.add_theme_color_override("font_color", PackageView.XP_GOLD)
@@ -431,13 +439,14 @@ class ChestScreen extends MenuScreens.Screen:
 		_refresh()
 
 	func _open() -> void:
-		if _busy or not Game.chest_ready():
+		var gift := not Game.gift_chests().is_empty()
+		if _busy or not (Game.chest_ready() or gift):
 			return
 		_busy = true
 		_open_btn.disabled = true
 		_view.open()
 		await _view.opened
-		var got: Dictionary = Game.open_chest()
+		var got: Dictionary = Game.open_gift_chest() if gift else Game.open_chest()
 		if not got.is_empty() and is_inside_tree():
 			var card := XpReveal.new(router, got)
 			add_child(card)

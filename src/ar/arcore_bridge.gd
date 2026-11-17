@@ -89,6 +89,14 @@ func open_app_settings() -> void:
 		plugin.call("openAppSettings")
 
 
+## v1.1.15: the phone's share sheet. False when this build has no way to show it (the game copies the link instead).
+func share(text: String, title: String) -> bool:
+	if plugin:
+		var r = plugin.call("share", text, title)    # (a build of the plugin without it answers null)
+		return r == true
+	return false
+
+
 func start(view: Vector2i) -> bool:
 	frame = -1
 	tracking = 0
@@ -271,5 +279,5 @@ func clear_anchor() -> void:
 ## The "Placing the table (AR)" help text on iPhone: its last line names Apple ARKit instead of Google ARCore.
 static func ios_help(key: String) -> String:
 	var lines := L.t(key).split("\n")
-	lines[lines.size() - 1] = L.t("AR uses Apple ARKit. If AR can't start, the game tells you why and what to do; you can always play in the Studio view instead.")
+	lines[lines.size() - 1] = L.t("AR uses Apple ARKit. If AR can't start, the game tells you why and what to do; you can always play in place instead.")
 	return "\n".join(lines)

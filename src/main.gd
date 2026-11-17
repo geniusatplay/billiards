@@ -22,7 +22,8 @@ var _toast_tw: Tween
 ## Gear whose shaders are already built (drawn once behind a cover): "cue:<id>", "balls:<id>", "table:<id>".
 var _warmed := {}
 var warm_enabled := true     # (the automated tour runs without the warm-up unless it is given --warmup)
-var _first_match := true     # the first match of a launch also starts behind the short cover (see _cover_and_warm)
+var _first_match := true
+var _tour_dir := ""          # (the automated tour opens the share popup itself)     # the first match of a launch also starts behind the short cover (see _cover_and_warm)
 
 
 func _ready() -> void:
@@ -40,6 +41,7 @@ func _ready() -> void:
 	stage.name = "Stage"
 	add_child(stage)
 	print("[boot] 3D stage built at %d ms" % Time.get_ticks_msec())
+	_boot(0.15)
 	ui_layer = CanvasLayer.new()
 	ui_layer.layer = 10
 	ui_layer.process_mode = Node.PROCESS_MODE_ALWAYS
@@ -47,6 +49,7 @@ func _ready() -> void:
 	ui_root = UIKit.fullrect(Control.new())
 	ui_root.theme = UIKit.theme()
 	print("[boot] theme + fonts at %d ms" % Time.get_ticks_msec())
+	_boot(0.22)
 	ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_layer.add_child(ui_root)
 	screen_host = UIKit.fullrect(Control.new())
@@ -73,6 +76,7 @@ func _ready() -> void:
 	stage.set_idle_spin(true)
 	Sfx.music(true)
 	get_viewport().size_changed.connect(_on_resize)
+	Net.update_required.connect(_show_update)
 	_fit_safe_area()
 	get_tree().create_timer(0.5).timeout.connect(_fit_safe_area)   # iOS knows the final safe area only once shown
 	Loc.language_changed.connect(_on_language_changed)
@@ -89,6 +93,7 @@ func _ready() -> void:
 		_run_tour(tour)
 	else:
 		await _warm_up()
+		_boot(0.95)
 		go("menu")
 		if not Net.signed_in() and not OS.get_cmdline_user_args().has("--offline"):
 			go("account")        # v1.1.13: ask for an account at every start until this phone is signed in
@@ -97,6 +102,7 @@ func _ready() -> void:
 		print("[boot] first frame drawn at %d ms" % Time.get_ticks_msec())
 		await RenderingServer.frame_post_draw
 		print("[boot] second frame drawn at %d ms" % Time.get_ticks_msec())
+		_boot(1.0)
 		var cover: Control = loading.get_child(0)
 		var tw := create_tween()
 		tw.tween_property(cover, "modulate:a", 0.0, 0.35)
@@ -126,11 +132,14 @@ func _warm_up() -> void:
 	g.setup(stage, layer, {"mode": "practice", "warmup": true})
 	h.setup(g, stage)
 	g.begin()
+	_boot(0.35)
 	await g.warm_draw(2)
+	_boot(0.7)
 	if stage.auto_mode() != Stage.Mode.STUDIO:
 		stage.warm_ar_look(true)
 		await g.warm_draw(2)
 		stage.warm_ar_look(false)
+	_boot(0.85)
 	var t_banner := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t_banner < 450 and DisplayServer.get_name() != "headless":
 		await get_tree().process_frame     # the banner's grow-in, frame by frame
@@ -195,7 +204,12 @@ func _cover_and_warm() -> void:
 	tw.tween_callback(layer.queue_free)
 
 
-## The loading screen: the game's name and "Loading…" on the menu's dark background, above everything else.
+## The loading screen (v1.1.15: the animated one Randy picks, LoadingScreen.STYLE_NAMES; "Emerald Vortex Games",
+## "Emerald Break" and "AR Pool Game"), above everything else, with how far loading has got.
+const LOADING_STYLE := 0
+var _boot_ls: LoadingScreen
+
+
 func _make_loading() -> CanvasLayer:
 	var layer := CanvasLayer.new()
 	layer.layer = 100
@@ -206,18 +220,17 @@ func _make_loading() -> CanvasLayer:
 	bg.color = UIKit.INK
 	UIKit.fullrect(bg)
 	cover.add_child(bg)
-	var v := UIKit.vbox(26)
-	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	UIKit.fullrect(v)
-	cover.add_child(v)
-	var gem := IconGlyph.make("gem", 150, UIKit.EMERALD)
-	gem.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	v.add_child(gem)
-	var title := UIKit.label(Game.TITLE.to_upper(), "TitleLabel", HORIZONTAL_ALIGNMENT_CENTER)
-	title.add_theme_constant_override("outline_size", 0)
-	v.add_child(title)
-	v.add_child(UIKit.label("Loading…", "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER))
+	_boot_ls = LoadingScreen.new(LOADING_STYLE)
+	_boot_ls.name = "LoadingScreen"
+	_boot_ls.progress = 0.04
+	cover.add_child(_boot_ls)
 	return layer
+
+
+## How far loading has got (0..1), for the loading screen's line.
+func _boot(p: float) -> void:
+	if _boot_ls and is_instance_valid(_boot_ls):
+		_boot_ls.progress = maxf(_boot_ls.progress, p)
 
 
 func _on_resize() -> void:
@@ -299,15 +312,82 @@ func _show(name: String) -> void:
 		"help": s = MenuScreens.HelpScreen.new(self)
 		"account": s = AccountScreen.new(self)
 		"account_login": s = AccountScreen.new(self, true)
+		"place_world": s = WorldScreens.PlaceWorldScreen.new(self)
 		_: s = MenuScreens.MainMenu.new(self)
 	_screen = s
 	FpsCounter.phase = "screen " + name
 	screen_host.add_child(s)
 	if game == null:
 		Sfx.music_context(false)
-		stage.set_mode(Stage.Mode.STUDIO)
+		# v1.1.15: a table put down in the room stays there behind the menus, ready for the next match
+		if not world_kept():
+			if Game.world_ready == "ar":
+				Game.world_ready = ""      # its table is no longer in the room: the menu offers Place world again
+			stage.set_mode(Stage.Mode.STUDIO)
 		stage.set_view(Stage.View.OVERVIEW)
 		stage.set_idle_spin(true)
+
+
+# ================================================================== the world (v1.1.15)
+## Randy: "when clicking a play option, if they havnt placed the world yet, they must do this before starting".
+## Every way into a match from the menus comes through here: "online", "pass_play", "vs_ai" or "practice".
+var _after_world := ""
+
+
+func play(target: String) -> void:
+	if Game.world_ready == "":
+		_after_world = target
+		go("place_world")
+		return
+	_open_play(target, false)
+
+
+## The tutorial version Randy picks (Tutorial.VERSIONS).
+const TUTORIAL_VERSION := 0
+
+
+## Testing builds: Debug → Tutorial can play any of the five versions (the store build always plays the one picked).
+func tutorial_version() -> int:
+	var v := int(Game.get_s("tut_version"))
+	return v if v >= 0 and v < Tutorial.VERSIONS.size() and Game.dev_tools() else TUTORIAL_VERSION
+
+
+## Debug → Tutorial → Play it now: from wherever the debug menu was opened.
+func debug_play_tutorial() -> void:
+	close_debug()
+	if game:
+		quit_to("menu")
+	play("tutorial")
+
+
+func _open_play(target: String, replace: bool) -> void:
+	if target == "practice":
+		start_match({"mode": "practice"})
+	elif target == "tutorial":
+		start_match({"mode": "practice", "tutorial": tutorial_version()})
+	elif target in ["online", "pass_play", "vs_ai"]:
+		go(target, replace)
+	elif replace:
+		back()
+
+
+## The world is ready (placed in the room, or Play in place): on to where the player was going, or back.
+func world_done() -> void:
+	var t := _after_world
+	_after_world = ""
+	_open_play(t, true)
+
+
+## The "Place world" button on the screens before a match (and on the main menu): choose again.
+func place_world_again() -> void:
+	var top := str(_stack.back()) if not _stack.is_empty() else ""
+	_after_world = top if top in ["online", "pass_play", "vs_ai"] else ""
+	go("place_world")      # (Back returns to the screen it was opened from)
+
+
+## Is a table standing in the room right now, put down from the menus or in a match?
+func world_kept() -> bool:
+	return Game.world_ready == "ar" and stage.mode == Stage.Mode.WORLD_AR and stage.placed
 
 
 func toast(text: String) -> void:
@@ -326,9 +406,10 @@ func start_match(cfg: Dictionary) -> void:
 	_close_overlays()
 	_end_match()
 	if cfg.get("online", false):
-		# both phones must play on exactly the same table with the same physics: the standard ones
+		# both phones must play on exactly the same table with the same physics: the standard ones (how high the
+		# table stands is the player's own: World height)
 		Game.reset_physics()
-		Game.reset_table()
+		Game.reset_table(true)
 	_last_cfg = cfg
 	if _screen:
 		_screen.queue_free()
@@ -336,7 +417,9 @@ func start_match(cfg: Dictionary) -> void:
 	get_tree().paused = false
 	stage.set_idle_spin(false)
 	stage.set_view(Stage.View.OVERVIEW)
-	stage.set_mode(stage.auto_mode())
+	# v1.1.15: the table the player put down in the room from the menus is played on where it stands
+	if not world_kept():
+		stage.set_mode(stage.auto_mode())
 	stage.new_match_scene()   # (only shows with "Scene background in AR" on, once the table is placed)
 	Sfx.music_context(true)
 	game = PoolGame.new()
@@ -346,6 +429,8 @@ func start_match(cfg: Dictionary) -> void:
 	ui_root.add_child(hud)
 	ui_root.move_child(hud, 1)
 	hud_setup(cfg)
+	if cfg.has("tutorial"):
+		hud.add_child(Tutorial.new(self, int(cfg["tutorial"])))
 
 
 func hud_setup(cfg: Dictionary) -> void:
@@ -423,13 +508,13 @@ func quit_to(where: String) -> void:
 
 
 func is_online() -> bool:
-	return game != null and game.online
+	return game != null and game.looks_online()
 
 
 func pause() -> void:
 	if game == null or _pause:
 		return
-	get_tree().paused = not game.online       # an online match goes on: the other player is waiting
+	get_tree().paused = not game.looks_online()       # an online match goes on: the other player is waiting
 	FpsCounter.phase = "pause menu"
 	_pause = Overlays.PauseMenu.new(self)
 	overlay_host.add_child(_pause)
@@ -468,6 +553,8 @@ func view_is_ar() -> bool:
 ## Going to AR closes the pause menu, because the room has to be seen to put the table down.
 func switch_view(to: String) -> void:
 	Game.set_s("ar_mode", to)
+	if to == "studio":
+		Game.world_ready = "studio"     # (back to "ar" once the table is put down in the room again)
 	if game == null:
 		return
 	var want: int = stage.auto_mode()
@@ -546,9 +633,56 @@ func _close_overlays() -> void:
 	close_debug()
 
 
+## v1.1.15 share popup: on the main menu after the first match, then every 30 minutes (never during a match). The time
+## it was last shown is kept, so restarting the game doesn't bring it straight back.
+const SHARE_EVERY := 30 * 60
+
+
+func share_due() -> bool:
+	if game != null or _stack.is_empty() or _stack.back() != "menu" or Net.update_needed:
+		return false
+	if int(Game.progress.get("matches", 0)) < 1 or overlay_host.get_node_or_null("SharePopup") or overlay_host.get_node_or_null("LanguagePicker"):
+		return false
+	return Game.now() - int(Game.get_s("share_last")) >= SHARE_EVERY
+
+
+func open_share() -> void:
+	if overlay_host.get_node_or_null("SharePopup"):
+		return
+	Game.set_s("share_last", Game.now())
+	overlay_host.add_child(StoreScreens.SharePopup.new(self))
+
+
+func _process(_delta: float) -> void:
+	if Engine.get_process_frames() % 30 == 0 and _tour_dir == "":
+		if tutorial_due():
+			Game.set_s("tutorial_offered", true)
+			play("tutorial")
+		elif share_due():
+			open_share()
+
+
+## The first time the main menu is free (after the account screen), the tutorial starts by itself, once, for a new
+## player (no match played, no XP: someone updating from an older version is not pulled into it). Skipped, it stays at
+## the top of the main menu until it has been played to the end.
+func tutorial_due() -> bool:
+	return game == null and not _stack.is_empty() and _stack.back() == "menu" and not Net.update_needed \
+		and not Game.tutorial_done() and not bool(Game.get_s("tutorial_offered")) \
+		and int(Game.stats.get("games", 0)) == 0 and Game.xp() == 0 \
+		and overlay_host.get_node_or_null("LanguagePicker") == null
+
+
+## Main menu → the language button; Settings → Language.
+func open_language() -> void:
+	if overlay_host.get_node_or_null("LanguagePicker"):
+		return
+	Sfx.ui("tap")
+	overlay_host.add_child(WorldScreens.LanguagePicker.new())
+
+
 # ================================================================== debug hooks
 func open_debug() -> void:
-	if _debug:
+	if _debug or not Game.dev_tools():
 		return
 	_debug = SettingsScreens.DebugMenu.new(self)
 	overlay_host.add_child(_debug)
@@ -573,7 +707,7 @@ func recalibrate() -> void:
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev is InputEventScreenTouch:
 		_touch_count = _touch_count + 1 if ev.pressed else maxi(_touch_count - 1, 0)
-		if ev.pressed and _touch_count == 3:
+		if ev.pressed and _touch_count == 3 and Game.dev_tools():
 			if _debug:
 				close_debug()
 			else:
@@ -584,7 +718,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 		match ev.keycode:
 			KEY_F3:
 				if _debug: close_debug()
-				else: open_debug()
+				elif Game.dev_tools(): open_debug()
 			KEY_ESCAPE:
 				if _pause: resume()
 				elif game: pause()
@@ -602,7 +736,15 @@ func _unhandled_input(ev: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## v1.1.15: the server says this version is too old: nothing but "Update needed" until the store has updated it.
+func _show_update() -> void:
+	if get_node_or_null("UpdateScreen") == null:
+		add_child(StoreScreens.UpdateScreen.new())
+
+
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED and game == null and stage != null:
+		Net.check_version()          # (back after a while: a version may have become too old meanwhile)
 	if what == NOTIFICATION_APPLICATION_PAUSED and game and not get_tree().paused:
 		# Nothing to pause while AR is still starting or the table isn't placed yet - and the camera
 		# permission dialog, the Play Store and Android Settings all send the app to the background.
@@ -615,7 +757,7 @@ func _notification(what: int) -> void:
 const _AUDIT_OK := ["AR", "AI", "IA", "KI", "Emerald Break", "EMERALD VORTEX GAMES", "Play", "Google", "ARCore", "Apple", "ARKit", "Store", "Outfit", "Noto Sans",
 	"SIL Open Font License", "Pool And Billiards SFX", "Suraj Kispotta", "CC0", "Emerald Vortex Games LLC", "cm", "Services for", "Emerald", "Classic",
 	"Obsidian Gold", "Neon Pulse", "Vortex Spiral", "Midnight Blue", "Crimson Club", "Vortex Violet", "Graphite", "Lounge", "Neon Night", "Sunset Deck", "Desert Dusk", "Firefly Grove", "Aurora Lake", "Coral Deep", "Neon Skyline", "Sky Temple", "Crystal Cavern", "Magma Forge", "Synth Horizon", "Orbit Station",
-	"Aurora", "Player", "English", "Español", "Français", "Deutsch", "Português", "Italiano", "8-ball", "8-BALL", "Pro", "CPU", "online", "Online", "ONLINE", "Nederlands", "Svenska", "Polski", "Čeština", "Română", "Türkçe", "Bahasa Indonesia", "Bahasa Melayu", "Tiếng Việt", "fps", "EMERALD BREAK", "tap", "for developer tools"]
+	"Aurora", "Player", "English", "Español", "Français", "Deutsch", "Português", "Italiano", "8-ball", "8-BALL", "Pro", "CPU", "online", "Online", "ONLINE", "Nederlands", "Svenska", "Polski", "Čeština", "Română", "Türkçe", "Bahasa Indonesia", "Bahasa Melayu", "Tiếng Việt", "fps", "EMERALD BREAK", "tap", "for developer tools", "AR POOL GAME", "Google Play", "App Store", "AR Pool Game"]
 
 
 ## Language audit: every button of the open pause menu must be on the screen (1 problem if one is not).
@@ -895,6 +1037,16 @@ func _census() -> void:
 	print("CENSUS total %d shown, %d cast shadows, %d surfaces" % total)
 
 
+## Is a button with this (untranslated) text showing anywhere under root?
+func mbtn_text(root: Node, txt: String) -> bool:
+	if root == null:
+		return false
+	for n in root.find_children("*", "Button", true, false):
+		if (n as Button).text == txt and (n as Control).is_visible_in_tree():
+			return true
+	return false
+
+
 func _shot(dir: String, name: String) -> void:
 	if "--noshots" in OS.get_cmdline_user_args() or DisplayServer.get_name() == "headless":
 		return
@@ -910,8 +1062,35 @@ func _wait(t: float) -> void:
 	await get_tree().create_timer(t).timeout
 
 
+## The tour's scripted player, for the tutorial recordings: the cue turns to the line, (for spin) the dot moves on
+## the pad, the cue is drawn back, then the shot. Not slow: straight to the shot.
+func _human_shot(yaw: float, power: float, offset: Vector2, slow: bool) -> void:
+	if slow and game:
+		await _wait(0.6)
+		var y0: float = game.control.yaw
+		for k in 27:
+			game.control.yaw = lerp_angle(y0, yaw, ease((k + 1) / 27.0, -2.0))
+			await get_tree().process_frame
+		if offset != Vector2.ZERO:
+			await _wait(0.3)
+			for k in 18:
+				game.control.offset = offset * ((k + 1) / 18.0)
+				(hud.get("_spin") as Widgets.SpinPad).set_spin(game.control.offset)
+				await get_tree().process_frame
+		await _wait(0.3)
+		for k in 21:
+			game.control.power = power * (k + 1) / 21.0
+			await get_tree().process_frame
+		await _wait(0.2)
+	if game == null:
+		return
+	game.fire(yaw, power, offset, 0.0)
+	game.control.power = 0.0
+
+
 func _run_tour(dir: String) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
+	_tour_dir = dir
 	Game.settings["unlock_all"] = false     # the tour looks at the game as a player has it (the default is on while testing)
 	Game.settings["fps_counter"] = "--fps" in OS.get_cmdline_user_args()   # (pictures without it, unless asked)
 	Game.settings_changed.emit("fps_counter")
@@ -921,12 +1100,13 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
 		if only == "" and s in ["perf", "ios_check"]:
 			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator)
+		Game.world_ready = "studio" if s != "world" else ""   # (v1.1.15: the world is chosen; the "world" step tests choosing it)
 		await _tour_step(dir, s)
 	print("TOUR done")
 	get_tree().quit()
@@ -1258,6 +1438,610 @@ func _tour_step(dir: String, s: String) -> void:
 				all_ok = all_ok and r[1]
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("ACCOUNT %s" % ("PASS" if all_ok else "FAIL"))
+		"standin":
+			# v1.1.15: Play Online finds nobody -> after the search time a match against a stand-in opponent that
+			# looks like an online player (name, level, own gear), never called the CPU, paid like online, not counted
+			# in the CPU records, not paused by the pause menu.
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			var res := []
+			_end_match()
+			Game.progress = Game.fresh_progress()
+			Game.set_s("ar_mode", "studio")
+			await Net.sign_up("standin@example.com", "secret1")
+			var ai_before := var_to_str([Game.stats.get("games_vs_ai", []), Game.stats.get("wins_vs_ai", [])])
+			go("online", true)
+			await _wait(0.4)
+			_screen.set("search_seconds", 2.0)
+			_screen.call("_search")
+			var waited := 0.0
+			while game == null and waited < 20.0:
+				srv.now = Time.get_ticks_msec() / 1000.0
+				await _wait(0.2)
+				waited += 0.2
+			res.append(["nobody else searching -> a match starts after the search time (%.1f s)" % waited, game != null and not game.fill_in.is_empty() and not game.online])
+			if game != null:
+				await _wait(1.5)
+				var nm := str(game.player_names[1])
+				var base_name := nm.rstrip("0123456789")
+				res.append(["the opponent has a screen name from the list (%s), level %d" % [nm, int(game.fill_in.get("level", -1))],
+					(nm in FillIn.NAMES or base_name in FillIn.NAMES) and not "CPU" in nm.to_upper()])
+				var hud_title := str(hud.call("_title_text"))
+				res.append(["the match is headed '8-BALL · ONLINE' (%s)" % hud_title, hud_title == "8-BALL · ONLINE"])
+				var cpu_words := []
+				for n in get_tree().root.find_children("*", "Label", true, false):
+					var lb := n as Label
+					if lb.is_visible_in_tree() and ("CPU" in lb.text or "KI" == lb.text):
+						cpu_words.append(lb.text)
+				res.append(["no text on screen calls it the CPU %s" % str(cpu_words), cpu_words.is_empty()])
+				res.append(["it pays like an online match (XP mode '%s')" % game.xp_mode(), game.xp_mode() == "online"])
+				res.append(["it brings its own cue (%s)" % str(game.cue_skins[1]), str(game.cue_skins[1]) == str(Catalog.cue(str(game.fill_in["cue"]))["id"])])
+				await _shot(dir, "standin_match")
+				pause()
+				await _wait(0.3)
+				res.append(["the pause menu doesn't stop the match (as online)", not get_tree().paused])
+				resume()
+				# their turn: they take a moment, as a person does
+				if not game.plays_here(game.current):
+					var thought := 0.0
+					while game.state == PoolGame.State.AI_THINK and thought < 20.0:
+						await _wait(0.1)
+						thought += 0.1
+					res.append(["on their turn they take a person's moment before striking (%.1f s)" % thought, thought >= 0.6])
+				game.rules.winner = 0
+				game.call("_finish", 0, "Sank the 8!")
+				await _wait(1.2)
+				var r2: Dictionary = _results.get("res") if _results else {}
+				res.append(["the result screen says ONLINE and offers 'New opponent'", _results != null and bool(r2.get("online", false)) and not bool(r2.get("vs_ai", true))])
+				res.append(["the CPU records are unchanged", var_to_str([Game.stats.get("games_vs_ai", []), Game.stats.get("wins_vs_ai", [])]) == ai_before])
+				await _shot(dir, "standin_results")
+			_close_overlays()
+			_end_match()
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.request_save()
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("STANDIN %s" % ("PASS" if all_ok else "FAIL"))
+		"world":
+			# v1.1.15 (Randy: "when clicking a play option, if they havnt placed the world yet, they must do this
+			# before starting, and if they have ... the place world button should be there on the screen they click
+			# ready at or vs cpu at the difficulty select screen"; "the only way to place the table should be place
+			# table in front of me or play in place")
+			var res := []
+			var keep_mode: String = str(Game.get_s("ar_mode"))
+			var keep_surface: String = str(Game.get_s("surface"))
+			var mbtn := func(root: Node, txt: String) -> Button:
+				for n in root.find_children("*", "Button", true, false):
+					if (n as Button).text == txt and (n as Control).is_visible_in_tree():
+						return n
+				return null
+			_end_match()
+			_stack.clear()
+			Game.world_ready = ""
+			go("menu")
+			await _wait(0.6)
+			res.append(["after a start the main menu offers 'Place world'", _screen.find_child("MenuPlaceWorld", true, false) != null])
+			res.append(["... and no 'View' chip any more", mbtn.call(_screen, "View: AR (table in your room)") == null and mbtn.call(_screen, "View: Studio (no camera)") == null])
+			res.append(["... and a language button", _screen.find_child("MenuLanguage", true, false) != null])
+			await _shot(dir, "world_menu")
+			(mbtn.call(_screen, "Play VS CPU") as Button).pressed.emit()
+			await _wait(0.6)
+			res.append(["Play VS CPU before placing -> 'Place your world' first", _screen is WorldScreens.PlaceWorldScreen and _after_world == "vs_ai"])
+			await _shot(dir, "world_choose")
+			(_screen.find_child("WorldGo_studio", true, false) as Button).pressed.emit()
+			await _wait(0.6)
+			res.append(["Play in place -> straight on to the difficulty screen, no camera", _screen is MenuScreens.MatchSetup and Game.world_ready == "studio" and stage.mode == Stage.Mode.STUDIO and Game.get_s("ar_mode") == "studio"])
+			res.append(["... which has the 'Place world' button", _screen.find_child("PlaceWorldButton", true, false) != null])
+			res.append(["... and Back goes to the main menu (not to the world choice)", str(_stack) == str(["menu", "vs_ai"]), str(_stack)])
+			await _shot(dir, "world_vs_cpu")
+			# put it in the room instead (simulated ARCore, mini on a desk)
+			stage.arcore.simulate = true
+			stage.arcore.sim_floor = 0.0
+			stage.arcore.sim_path = func(_t: float) -> Transform3D:
+				return Transform3D(Basis.looking_at(Vector3(0, -0.75, -1.0), Vector3.UP), Vector3(0, 1.2, 0))
+			(_screen.find_child("PlaceWorldButton", true, false) as Button).pressed.emit()
+			await _wait(0.6)
+			res.append(["'Place world' -> the choice again, Play in place marked as now", _screen is WorldScreens.PlaceWorldScreen and _after_world == "vs_ai" and _screen.find_child("WorldNow", true, false) != null])
+			(_screen.find_child("WorldGo_ar", true, false) as Button).pressed.emit()
+			await _wait(1.6)
+			var panel: ArPlacePanel = _screen.get("_panel")
+			res.append(["'Place in front of me' -> the camera and the placing panel", stage.mode == Stage.Mode.WORLD_AR and panel.is_visible_in_tree() and not stage.placed])
+			await _shot(dir, "world_placing")
+			var push0: Vector3 = stage.get("_ar_pos")
+			Game.set_s("ar_push", 0.5)
+			await _wait(0.3)
+			var push1: Vector3 = stage.get("_ar_pos")
+			res.append(["Debug → AR table further: the table goes 0.5 m further along the floor (%.2f m)" % push0.distance_to(push1), absf(push0.distance_to(push1) - 0.5) < 0.06 and absf(push1.y - push0.y) < 0.01])
+			Game.set_s("ar_push", 0.0)
+			await _wait(0.3)
+			var pc := panel.place.get_global_rect().get_center()
+			await _touch(0, pc, true)
+			await _touch(0, pc, false)
+			await _wait(0.8)
+			res.append(["Place -> back on the difficulty screen, the table stays in the room", _screen is MenuScreens.MatchSetup and Game.world_ready == "ar" and stage.mode == Stage.Mode.WORLD_AR and stage.placed])
+			await _shot(dir, "world_vs_cpu_ar")
+			var pos_placed: Vector3 = stage.get("_ar_pos")
+			back()
+			await _wait(0.5)
+			res.append(["main menu: still in the room, no 'Place world' button now", stage.mode == Stage.Mode.WORLD_AR and stage.placed and _screen.find_child("MenuPlaceWorld", true, false) == null])
+			await _shot(dir, "world_menu_ar")
+			(mbtn.call(_screen, "Play VS CPU") as Button).pressed.emit()
+			await _wait(0.5)
+			res.append(["placed -> Play VS CPU goes straight to the difficulty screen", _screen is MenuScreens.MatchSetup])
+			_screen.call("_start")
+			await _wait(1.2)
+			res.append(["Break! -> the match is on the table where it stands (no placing again)", game != null and stage.placed and game.state != PoolGame.State.PLACE_TABLE and (stage.get("_ar_pos") as Vector3).is_equal_approx(pos_placed)])
+			await _shot(dir, "world_match_ar")
+			quit_to("menu")
+			await _wait(0.5)
+			res.append(["quit -> the menu, the table still in the room", stage.mode == Stage.Mode.WORLD_AR and stage.placed and Game.world_ready == "ar"])
+			go("online")
+			await _wait(0.4)
+			res.append(["Play Online has the 'Place world' button", _screen.find_child("PlaceWorldButton", true, false) != null])
+			# giving up placing: no table in the room, the menus go back to Play in place and ask again
+			(_screen.find_child("PlaceWorldButton", true, false) as Button).pressed.emit()
+			await _wait(0.4)
+			(_screen.find_child("WorldGo_ar", true, false) as Button).pressed.emit()
+			await _wait(0.8)
+			res.append(["placing again takes the table away first", not stage.placed and stage.mode == Stage.Mode.WORLD_AR])
+			(_screen.find_child("PlacingBack", true, false) as Button).pressed.emit()
+			await _wait(0.5)
+			res.append(["Back while placing -> the choice again, no camera, nothing placed", stage.mode == Stage.Mode.STUDIO and Game.world_ready == "" and (_screen.get("_cards") as Control).visible])
+			# the camera refused: say what is needed, offer the camera again, or Play in place (Randy, 17 Nov)
+			(_screen.find_child("WorldGo_ar", true, false) as Button).pressed.emit()
+			await _wait(0.6)
+			stage.call("_block_ar", "permission")
+			await _wait(0.4)
+			var cp: ArPlacePanel = _screen.get("_panel")
+			res.append(["camera refused -> says the camera is the one permission needed, with Open app settings, Try again and Play in place",
+				cp.lbl.text.contains("the camera") and cp.settings_b.is_visible_in_tree() and cp.retry.is_visible_in_tree() and cp.studio.is_visible_in_tree() and not cp.place.visible])
+			await _shot(dir, "world_camera_refused")
+			cp.retry.pressed.emit()
+			await _wait(0.8)
+			res.append(["... Try again -> AR starts again", stage.ar_state != Stage.ArState.BLOCKED and stage.mode == Stage.Mode.WORLD_AR])
+			stage.call("_block_ar", "permission")
+			await _wait(0.3)
+			cp.studio.pressed.emit()
+			await _wait(0.6)
+			res.append(["... Play in place -> no camera, chosen", stage.mode == Stage.Mode.STUDIO and Game.world_ready == "studio" and not (_screen is WorldScreens.PlaceWorldScreen)])
+			Game.world_ready = ""
+			_stack.clear()
+			go("menu")
+			await _wait(0.4)
+			res.append(["... and the main menu offers 'Place world' again", _screen.find_child("MenuPlaceWorld", true, false) != null])
+			(mbtn.call(_screen, "Practice") as Button).pressed.emit()
+			await _wait(0.5)
+			res.append(["Practice before placing -> the choice first", _screen is WorldScreens.PlaceWorldScreen and _after_world == "practice"])
+			(_screen.find_child("WorldGo_studio", true, false) as Button).pressed.emit()
+			await _wait(1.2)
+			res.append(["Play in place -> the practice starts", game != null and game.mode == "practice" and stage.mode == Stage.Mode.STUDIO])
+			_end_match()
+			# the match's own "Play in place" (AR can't start) is remembered for the next matches too
+			Game.world_ready = ""
+			Game.set_s("ar_mode", "auto")
+			stage.arcore.sim_availability = "unsupported"
+			start_match({"mode": "practice"})
+			await _wait(0.8)
+			var stu: Button = hud.get("_ar_studio")
+			stu.pressed.emit()
+			await _wait(0.5)
+			res.append(["match: AR can't start -> Play in place -> chosen for the next matches", stage.mode == Stage.Mode.STUDIO and Game.world_ready == "studio" and Game.get_s("ar_mode") == "studio"])
+			_end_match()
+			stage.arcore.sim_availability = "installed"
+			stage.arcore.simulate = false
+			Game.set_s("ar_mode", keep_mode)
+			Game.set_s("surface", keep_surface)
+			Game.world_ready = "studio"
+			_stack.clear()
+			go("menu")
+			stage.set_mode(Stage.Mode.STUDIO)
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("WORLD %s" % ("PASS" if all_ok else "FAIL"))
+		"options":
+			# v1.1.15 options menu: sound, language (a picker behind one button), world size and height, the
+			# developer tools only in the testing builds, and the debug camera zoom
+			var res := []
+			var keep: Dictionary = {}
+			for k in ["music_volume", "sfx_volume", "surface", "ar_scale_desk", "ar_scale_floor", "table_height", "language", "cam_zoom"]:
+				keep[k] = Game.get_s(k)
+			_end_match()
+			_stack.clear()
+			go("menu")
+			go("settings")
+			await _wait(0.6)
+			res.append(["two columns: Sound and Language on the left, World on the right", _screen.find_child("SettingsLeft", true, false) != null and _screen.find_child("SettingsRight", true, false) != null])
+			var sl := func(nm: String) -> HSlider: return _screen.find_child("Slider_" + nm, true, false)
+			res.append(["sliders: music, game sounds, world size, world height", sl.call("Musicvolume") != null and sl.call("Gamesounds") != null and sl.call("Worldsize") != null and sl.call("Worldheight") != null])
+			(sl.call("Musicvolume") as HSlider).value = 0.35
+			(sl.call("Gamesounds") as HSlider).value = 0.6
+			res.append(["music and game volume are saved", is_equal_approx(float(Game.get_s("music_volume")), 0.35) and is_equal_approx(float(Game.get_s("sfx_volume")), 0.6)])
+			(sl.call("Worldsize") as HSlider).value = 1.0
+			res.append(["world size all the way -> life-size on the floor", Game.get_s("surface") == "floor" and is_equal_approx(float(Game.get_s("ar_scale_floor")), 1.0)])
+			(sl.call("Worldsize") as HSlider).value = 0.35
+			res.append(["world size 35% -> mini on a desk at 0.35", Game.get_s("surface") == "desk" and is_equal_approx(float(Game.get_s("ar_scale_desk")), 0.35) and is_equal_approx(Game.world_size(), 0.35)])
+			(sl.call("Worldheight") as HSlider).value = 0.9
+			res.append(["world height -> the table stands 90 cm", is_equal_approx(float(Game.get_s("table_height")), 0.9) and absf(stage.table_root.global_position.y - 0.9) < 0.01])
+			res.append(["the world background chips are there", _screen.find_child("WorldBackground", true, false) != null])
+			res.append(["testing build: the developer tools card and its debug button", mbtn_text(_screen, "Open debug menu")])
+			await _shot(dir, "options")
+			(_screen.find_child("SettingsLanguage", true, false) as Button).pressed.emit()
+			await _wait(0.5)
+			var lp := overlay_host.get_node_or_null("LanguagePicker")
+			res.append(["Language button -> the languages to choose from", lp != null and lp.find_child("Lang_de", true, false) != null and lp.find_child("Lang_auto", true, false) != null])
+			await _shot(dir, "options_language")
+			(lp.find_child("Lang_de", true, false) as Button).pressed.emit()
+			await _wait(0.8)
+			res.append(["Deutsch -> the picker closes, the game is in German", overlay_host.get_node_or_null("LanguagePicker") == null and TranslationServer.get_locale().begins_with("de")])
+			await _shot(dir, "options_de")
+			Loc.set_language(str(keep["language"]))
+			await _wait(0.6)
+			# camera zoom (debug): the Play-in-place camera's default distance
+			stage.set_view(Stage.View.OVERVIEW)
+			await _wait(0.4)
+			var d1: float = stage.get("_want_dist")
+			Game.set_s("cam_zoom", 1.5)
+			await _wait(0.3)
+			var d2: float = stage.get("_want_dist")
+			res.append(["Debug camera zoom 1.5 -> the camera 1.5× as far back (%.2f -> %.2f m)" % [d1, d2], absf(d2 / maxf(d1, 0.01) - 1.5) < 0.02])
+			Game.set_s("cam_zoom", 1.0)
+			# the store build: no debug menu anywhere
+			Game.pretend_store = true
+			_stack.clear()
+			go("menu")
+			await _wait(0.4)
+			var ver_txt := ""
+			for n in _screen.find_children("*", "Button", true, false):
+				if (n as Button).text.begins_with("v" + Game.VERSION):
+					ver_txt = (n as Button).text
+			res.append(["store build: the version shows no '7 taps' (%s)" % ver_txt, ver_txt == "v" + Game.VERSION])
+			go("settings")
+			await _wait(0.4)
+			res.append(["store build: no developer tools in Settings", not mbtn_text(_screen, "Open debug menu")])
+			open_debug()
+			res.append(["store build: the debug menu can't be opened", _debug == null])
+			await _shot(dir, "options_store")
+			start_match({"mode": "practice"})
+			await _wait(1.0)
+			pause()
+			await _wait(0.4)
+			res.append(["store build: no 'Debug menu' in the pause menu", not mbtn_text(_pause, "Debug menu") and mbtn_text(_pause, "Settings")])
+			resume()
+			_end_match()
+			Game.pretend_store = false
+			for k in keep.keys():
+				if k != "language":
+					Game.set_s(k, keep[k])
+			_stack.clear()
+			go("menu")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("OPTIONS %s" % ("PASS" if all_ok else "FAIL"))
+		"share":
+			# v1.1.15 share popup: after the first match, then every 30 minutes, closable; Share / Copy link / QR code;
+			# a gift chest for sharing once a day (opens at once from the menu's chest); the tutorial's gift chest too
+			var res := []
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			var keep_last := int(Game.get_s("share_last"))
+			_end_match()
+			_stack.clear()
+			Game.progress = Game.fresh_progress()
+			Game.set_s("share_last", 0)
+			go("menu")
+			await _wait(0.4)
+			res.append(["no match played yet -> no share popup", not share_due()])
+			Game.progress["matches"] = 1
+			res.append(["after the first match, on the main menu -> it's due", share_due()])
+			open_share()
+			await _wait(0.6)
+			var sp: Control = overlay_host.get_node_or_null("SharePopup")
+			res.append(["the popup: Share, Copy link, QR code, close", sp != null and sp.find_child("ShareSend", true, false) != null and sp.find_child("ShareCopy", true, false) != null
+				and sp.find_child("ShareQr", true, false) != null and sp.find_child("ShareClose", true, false) != null])
+			await _shot(dir, "share_popup")
+			(sp.find_child("ShareQr", true, false) as Button).pressed.emit()
+			await _wait(0.4)
+			var qimg: TextureRect = sp.find_child("ShareQrImage", true, false)
+			res.append(["QR code button -> the code shows", qimg != null and qimg.is_visible_in_tree()])
+			await _shot(dir, "share_qr")
+			if qimg:
+				qimg.texture.get_image().save_png(dir + "/share_qr_code.png")
+			(sp.find_child("ShareCopy", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			res.append(["Copy link -> the link is copied and a gift chest is given", DisplayServer.clipboard_get().contains(Net.SHARE_URL) and Game.gift_chests() == ["share"]])
+			(sp.find_child("ShareCopy", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			res.append(["copying again the same day -> no second chest", Game.gift_chests().size() == 1])
+			res.append(["the popup says today's chest is had", str((sp.find_child("ShareNote", true, false) as Label).text).begins_with("Today's chest")])
+			await _shot(dir, "share_claimed")
+			(sp.find_child("ShareClose", true, false) as Button).pressed.emit()
+			await _wait(0.4)
+			res.append(["X closes it, and it isn't due again at once", overlay_host.get_node_or_null("SharePopup") == null and not share_due()])
+			Game.clock_shift += 31 * 60
+			res.append(["30 minutes later it's due again", share_due()])
+			Game.clock_shift -= 31 * 60
+			go("pass_play")
+			Game.clock_shift += 31 * 60
+			res.append(["... but only on the main menu", not share_due()])
+			Game.clock_shift -= 31 * 60
+			_stack.clear()
+			go("menu")
+			await _wait(0.5)
+			var chest_b: Button = _screen.find_child("XpChest", true, false)
+			var ct: Label = _screen.find_child("ChestTime", true, false)
+			res.append(["the menu's chest says Ready! (a gift chest is waiting)", chest_b != null and ct != null and ct.text == L.t("Ready!")])
+			go("chest")
+			await _wait(0.5)
+			res.append(["the chest screen: a gift for sharing, open now", str((_screen.find_child("ChestStatus", true, false) as Label).text).contains(L.t("A gift for sharing the game: open it now!"))])
+			await _shot(dir, "share_gift_chest")
+			var xp0 := Game.xp()
+			_screen.call("_open")
+			await _wait(3.0)
+			res.append(["opened -> XP and no gift left", Game.xp() > xp0 and Game.gift_chests().is_empty()])
+			_close_overlays()
+			Game.progress = keep_pr
+			Game.set_s("share_last", keep_last)
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("SHARE %s" % ("PASS" if all_ok else "FAIL"))
+		"update":
+			# v1.1.15: the server's version file says this version is too old -> only "Update needed" (opens the store)
+			var res := []
+			_end_match()
+			_stack.clear()
+			go("menu")
+			await _wait(0.3)
+			var srv = load("res://tests/fake_server.gd").new()
+			srv.set("version", {"min": "9.0.0", "latest": "9.0.0", "ios": "https://apps.apple.com/app/id0000000000", "web": Net.SHARE_URL})
+			Net.fake = srv
+			await Net.check_version()
+			await _wait(0.6)
+			var us: Node = get_node_or_null("UpdateScreen")
+			res.append(["version 9.0.0 needed -> 'Update needed' covers the game", us != null and Net.update_needed])
+			res.append(["... with an Update now button", us != null and us.find_child("UpdateNow", true, false) != null])
+			res.append(["... the store page here (a computer): the web page", Net.store_url() == Net.SHARE_URL])
+			res.append(["... and no share popup on top of it", not share_due()])
+			await _shot(dir, "update_needed")
+			if us:
+				us.queue_free()
+			Net.update_needed = false
+			srv.set("version", {"min": "1.0.0", "latest": Game.VERSION})
+			await Net.check_version()
+			await _wait(0.3)
+			res.append(["version 1.0.0 needed -> nothing in the way", get_node_or_null("UpdateScreen") == null and not Net.update_needed])
+			Net.fake = null
+			Net.store_info = {}
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("UPDATE %s" % ("PASS" if all_ok else "FAIL"))
+		"tutorial":
+			# v1.1.15: the in-game tutorial, every version played to the end by a scripted player (a shot is the real
+			# physics: a miss is set up again, as for a player), then Skip, the menu button and the gift chest.
+			# --tutvers=0,3 limits the versions; --movie keeps it slow enough to record.
+			var res := []
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			var vers := [0, 1, 2, 3, 4]
+			var movie := "--movie" in OS.get_cmdline_user_args()
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--tutvers="):
+					vers = Array(arg.substr(10).split(",")).map(func(x): return int(x))
+			Game.set_s("ar_mode", "studio")
+			Game.set_s("control_scheme", "slingshot")
+			for v in vers:
+				_end_match()
+				Game.progress = Game.fresh_progress()
+				_stack.clear()
+				go("menu")
+				await _wait(1.6 if movie else 0.4)
+				if v == vers[0]:
+					res.append(["not finished -> 'Play tutorial' at the top of the main menu", _screen.find_child("MenuTutorial", true, false) != null])
+					var keep_games := int(Game.stats.get("games", 0))
+					var keep_off: bool = bool(Game.get_s("tutorial_offered"))
+					Game.settings["tutorial_offered"] = false
+					Game.stats["games"] = 0
+					var due_new := tutorial_due()
+					Game.stats["games"] = 12
+					res.append(["a new player: it starts by itself; someone updating (matches played) is only offered it", due_new and not tutorial_due()])
+					Game.stats["games"] = keep_games
+					Game.settings["tutorial_offered"] = keep_off
+					# Debug → Tutorial: a testing build plays the version chosen there, a store build the picked one
+					Game.settings["tut_version"] = 3
+					var dev_v := tutorial_version()
+					Game.pretend_store = true
+					var store_v := tutorial_version()
+					Game.pretend_store = false
+					Game.settings["tut_version"] = -1
+					res.append(["Debug -> Tutorial version 3: a testing build plays 3, a store build its pick (%d)" % TUTORIAL_VERSION, dev_v == 3 and store_v == TUTORIAL_VERSION])
+				start_match({"mode": "practice", "tutorial": v})
+				await _wait(1.2)
+				var tut: Tutorial = hud.get_node_or_null("Tutorial")
+				var shots := 0
+				var seen: Array = []
+				var t0 := Time.get_ticks_msec()
+				while tut and is_instance_valid(tut) and tut.get_node_or_null("TutorialEnd") == null and Time.get_ticks_msec() - t0 < (14400000 if movie else 900000) and shots < 30:
+					await _wait(0.2)
+					if tut.get("_busy") or game.state == PoolGame.State.ROLLING:
+						continue
+					var id := tut.current()
+					if not id in seen:
+						seen.append(id)
+						await _shot(dir, "tutorial_v%d_%s" % [v, id])
+					var sim: PoolSim = game.sim
+					match id:
+						"aim":
+							if movie:
+								await _wait(1.0)
+							for k in (36 if movie else 12):
+								game.control.yaw = lerp_angle(game.control.yaw, float(tut.get("_target_yaw")), 0.14 if movie else 0.35)
+								await get_tree().process_frame
+							await _wait(0.6)
+						"hand":
+							if game.state == PoolGame.State.BALL_IN_HAND:
+								var o: Vector2 = sim.pos[sim.index_of_number(8 if v == 4 else 1)]
+								var pk: Vector2 = Vector2(sim.table.a, -sim.table.b)
+								var d := (pk - o).normalized()
+								if movie:
+									# dragged across, as a finger would
+									await _wait(0.9)
+									var from := game.cue_ball_pos()
+									for k in 30:
+										game.move_cue_ball(from.lerp(o - d * 0.45, ease((k + 1) / 30.0, -2.0)))
+										await get_tree().process_frame
+								game.move_cue_ball(o - d * 0.45)
+								await _wait(0.5)
+								await _shot(dir, "tutorial_v%d_hand_moved" % v)
+								game.confirm_cue_placement()
+								await _wait(0.4)
+						"break":
+							await _human_shot(0.0, 0.95, Vector2.ZERO, movie)
+							shots += 1
+							await _wait(0.6)
+							await _shot(dir, "tutorial_v%d_break_shot" % v)
+							if not movie:
+								game.fast_forward()
+						_:
+							if game.state != PoolGame.State.AIM:
+								continue
+							var n := 8 if id in ["eight", "hand2_8"] else (2 if id == "pot2" else 1)
+							if sim.st[sim.index_of_number(n)] == PoolSim.ST_POCKETED:
+								continue
+							var yaw: float = tut.call("_aim_yaw_for", n)
+							if id.begins_with("hand2") and not movie and not ("miss_" + id) in seen:
+								# one miss on purpose: the same shot is set up again, the white ball where it was put
+								seen.append("miss_" + id)
+								await _human_shot(yaw + 1.2, 0.3, Vector2.ZERO, false)
+								shots += 1
+								await _wait(0.5)
+								while game.state == PoolGame.State.ROLLING or tut.get("_busy"):
+									await _wait(0.2)
+								var placed: Vector2 = tut.get("_placed_at")
+								res.append(["version %d: a miss after ball in hand is set up again, the white ball back where it was put (%.3f m off)" % [v, game.cue_ball_pos().distance_to(placed)], game.cue_ball_pos().distance_to(placed) < 0.01 and tut.current() == id])
+								continue
+							if v == 3:
+								await _wait(0.8)
+							await _human_shot(yaw, 0.62 if id == "draw" else 0.42, Vector2(0, -0.75) if id == "draw" else Vector2.ZERO, movie)
+							shots += 1
+							await _wait(0.3)
+							if seen.count(id + "_rolling") == 0:
+								seen.append(id + "_rolling")
+								await _wait(0.6)
+								await _shot(dir, "tutorial_v%d_%s_shot" % [v, id])
+							if not movie:
+								game.fast_forward()
+				var end_n: Node = tut.get_node_or_null("TutorialEnd") if tut and is_instance_valid(tut) else null
+				res.append(["version %d (%s): every objective met in turn, %d shots" % [v, Tutorial.VERSIONS[v]["name"], shots], end_n != null and Game.tutorial_done()])
+				await _wait(0.8)
+				await _shot(dir, "tutorial_v%d_end" % v)
+				if end_n:
+					var gifts := Game.gift_chests().size()
+					var xp0 := Game.xp()
+					(end_n.find_child("TutorialOpenChest", true, false) as Button).pressed.emit()
+					await _wait(3.2)
+					await _shot(dir, "tutorial_v%d_chest" % v)
+					res.append(["version %d: the gift chest opens at once (no timer, no advert)" % v, gifts == 1 and Game.xp() > xp0 and Game.gift_chests().is_empty()])
+					for n in end_n.find_children("*", "Button", true, false):
+						if (n as Button).text in ["Done", "OK", "Continue"] and (n as Control).is_visible_in_tree():
+							(n as Button).pressed.emit()
+					await _wait(0.5)
+					(end_n.find_child("TutorialMenu", true, false) as Button).pressed.emit()
+					await _wait(0.6)
+					res.append(["version %d: back on the main menu, no 'Play tutorial' now" % v, game == null and _screen.find_child("MenuTutorial", true, false) == null])
+			# skipping doesn't count
+			if movie:
+				await _wait(1.0)
+				Game.progress = keep_pr
+				Game.request_save()
+				for r in res:
+					print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+				print("TUTORIAL %s" % ("PASS" if res.all(func(r): return r[1]) else "FAIL"))
+				get_tree().quit()
+				return
+			_end_match()
+			Game.progress = Game.fresh_progress()
+			start_match({"mode": "practice", "tutorial": 2})
+			await _wait(1.0)
+			var tut2: Tutorial = hud.get_node_or_null("Tutorial")
+			(tut2.find_child("TutorialSkip", true, false) as Button).pressed.emit()
+			await _wait(0.6)
+			res.append(["Skip -> the main menu, the tutorial not done and still offered", game == null and not Game.tutorial_done() and _screen.find_child("MenuTutorial", true, false) != null])
+			Game.progress = keep_pr
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("TUTORIAL %s" % ("PASS" if all_ok else "FAIL"))
+		"tut_lang":
+			# v1.1.15: the tutorial in every language: each objective's card (versions 0, 1 and 4 hold every text),
+			# nothing left in English or cut off, the card above the table's far rail, and the end screen.
+			# --langs=de,ta limits the languages.
+			var langs := Loc.codes()
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--langs="):
+					langs = Array(arg.substr(8).split(","))
+			var problems := 0
+			var tallest := 0.0
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			Game.set_s("ar_mode", "studio")
+			for code in langs:
+				Loc.set_language(code)
+				for v in [0, 4, 1]:
+					_end_match()
+					Game.progress = Game.fresh_progress()
+					start_match({"mode": "practice", "tutorial": v})
+					await _wait(0.9)
+					var tut: Tutorial = hud.get_node_or_null("Tutorial")
+					var ids: Array = Tutorial.VERSIONS[v]["steps"]
+					var pairs := []
+					for i in ids.size():
+						pairs.append([i, 0])
+						if ids[i] == "hand":
+							pairs.append([i, 1])
+					for pr in pairs:
+						tut.set("_busy", true)
+						tut.step = pr[0]
+						tut.phase = pr[1]
+						tut.call("_show_text")
+						await _wait(0.12)
+						var card: Control = tut.find_child("TutorialCard", true, false)
+						tallest = maxf(tallest, card.size.y)
+						if card.get_global_rect().end.y > 330.0:
+							problems += 1
+							print("  TALL [%s/v%d/%s] the card ends at y %d (the far rail is at about 330)" % [code, v, tut.current(), card.get_global_rect().end.y])
+						problems += _audit_text(code, "tutorial v%d %s" % [v, tut.current()])
+						if code in ["de", "ta", "ar", "ja"] and v == 0 and tut.current() == "draw":
+							await _shot(dir, "tut_lang_%s_draw" % code)
+						if code in ["de", "ru"] and v == 4 and tut.current() == "hand":
+							await _shot(dir, "tut_lang_%s_coach" % code)
+					if v == 1:
+						tut.call("_complete")
+						await _wait(0.6)
+						problems += _audit_text(code, "tutorial end")
+						if code in ["de", "ta"]:
+							await _shot(dir, "tut_lang_%s_end" % code)
+				_end_match()
+			Game.progress = keep_pr
+			Loc.set_language("en")
+			_stack.clear()
+			go("menu")
+			print("TUT_LANG %s: %d problems in %d languages (tallest card %d px)" % ["PASS" if problems == 0 else "FAIL", problems, langs.size(), tallest])
 		"ios_check":
 			# Run on an iPhone or the iOS simulator (the cloud build does: ios_plugin/ci.sh sim): the real ARKit
 			# plugin and the real notch. --only=ios_check. Results are printed before the picture is taken.
@@ -1382,6 +2166,7 @@ func _tour_step(dir: String, s: String) -> void:
 			# 5. iPhone (ARKit, v1.1.12): the reasons name Apple ARKit and never the Play Store; while iOS asks
 			#    "allow the camera?" AR waits for the answer instead of timing out; "Don't Allow" -> app settings
 			stage.arcore.ios = true
+			Game.set_s("ar_mode", "auto")          # (v1.1.15: Play in place above stays chosen for the next matches)
 			start_match({"mode": "practice"})
 			await _wait(0.8)
 			res.append(["iPhone without ARKit -> 'doesn't support Apple ARKit', no store button",
@@ -1406,10 +2191,10 @@ func _tour_step(dir: String, s: String) -> void:
 			res.append(["...camera allowed in Settings, back in the game -> AR running", stage.ar_state == Stage.ArState.RUNNING])
 			var keep_loc := TranslationServer.get_locale()
 			TranslationServer.set_locale("de")
-			var help_de := ARCoreBridge.ios_help("Choose Mini (on a desk) or Life-size (on the floor). Point the phone at the surface and sweep it slowly side to side until \"Floor found\" appears and the table stands there, then tap Place. The table stays fixed in your room: walk all the way around it, lean in, crouch. The move button lets you drag, pinch and twist the table; the recenter button places it again.\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in the Studio view instead.")
+			var help_de := ARCoreBridge.ios_help("Place world (on the main menu, and on the screen before a match) offers two ways. In front of me: point the phone at the floor or a desk and sweep it slowly until the table appears, then tap Place. It stays put in your room: walk all the way around it, lean in, crouch. Settings → World sets its size and height. Play in place: no camera, the table in its own world (Settings → World background).\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in place instead.")
 			TranslationServer.set_locale(keep_loc)
 			res.append(["iPhone help text (German): names Apple ARKit, not ARCore, rest translated",
-				help_de.contains("AR nutzt Apple ARKit") and not help_de.contains("ARCore") and help_de.begins_with("Wähle") and help_de.count("\n") == 1])
+				help_de.contains("AR nutzt Apple ARKit") and not help_de.contains("ARCore") and help_de.begins_with("„Welt platzieren“") and help_de.count("\n") == 1])
 			stage.arcore.ios = false
 			var all_ok := true
 			for r in res:
@@ -1911,6 +2696,7 @@ func _tour_step(dir: String, s: String) -> void:
 				if arg.begins_with("--langs="):
 					langs = Array(arg.substr(8).split(","))
 			var problems := 0
+			_end_match()            # (a step before may have left a match running under the menus)
 			Game.set_s("ar_mode", "studio")
 			for code in langs:
 				Loc.set_language(code)
@@ -1925,8 +2711,9 @@ func _tour_step(dir: String, s: String) -> void:
 				if not Game.progress.has("pk_time"):
 					Game.progress["pk_time"] = {}
 				(Game.progress["pk_time"] as Dictionary)["3"] = Game.now()
-				for scr in ["menu", "online", "gear", "packages", "chest", "vs_ai", "pass_play", "controls", "settings", "help"]:
+				for scr in ["menu", "online", "gear", "packages", "chest", "vs_ai", "pass_play", "controls", "settings", "help", "place_world"]:
 					_stack.clear()
+					Game.world_ready = "" if scr in ["menu", "place_world"] else "studio"   # (v1.1.15: the menu's Place world button)
 					go(scr)
 					await _wait(0.5)
 					problems += _audit_text(code, scr)
@@ -2764,7 +3551,7 @@ func _tour_step(dir: String, s: String) -> void:
 			pause()
 			await _wait(0.6)
 			pchk.call("Studio: the card offers View and Scene, nothing about a table to move",
-				pm_btn.call("Studio (no camera)") != null and (pm_btn.call("Studio (no camera)") as Button).button_pressed and pm_btn.call("Desk (mini)") == null
+				pm_btn.call("Play in place") != null and (pm_btn.call("Play in place") as Button).button_pressed and pm_btn.call("Mini") == null
 				and pm_btn.call("Move / raise / lower table") == null and pm_btn.call("Place the table again") == null and _pause.find_child("SceneNext", true, false) != null)
 			pchk.call("Studio: every button of the pause menu is on the screen", pm_fits.call())
 			(_pause.find_child("SceneNext", true, false) as Button).pressed.emit()
@@ -2778,7 +3565,7 @@ func _tour_step(dir: String, s: String) -> void:
 			pchk.call("... and the arrows go round both ways", sc2 != sc1 and sc2 != "lounge" and str((stage.get("_scene") as Dictionary).get("id", "")) == sc2, sc2)
 			await _shot(dir, "pause_studio")
 			# ---- to AR in the middle of the match
-			pm_tap.call("AR (walk around)")
+			pm_tap.call("In front of me (AR)")
 			await _wait(1.0)
 			var arp: Control = hud.get("_ar_panel")
 			pchk.call("View -> AR: the menu closes and the table is to be put down", _pause == null and stage.mode == Stage.Mode.WORLD_AR and not stage.placed and arp.visible and Game.get_s("ar_mode") == "auto")
@@ -2794,10 +3581,10 @@ func _tour_step(dir: String, s: String) -> void:
 			pause()
 			await _wait(0.6)
 			pchk.call("AR: the card offers View, Surface, moving the table, placing it again and the scene background",
-				(pm_btn.call("AR (walk around)") as Button).button_pressed and pm_btn.call("Desk (mini)") != null and pm_btn.call("Move / raise / lower table") != null
+				(pm_btn.call("In front of me (AR)") as Button).button_pressed and pm_btn.call("Mini") != null and pm_btn.call("Move / raise / lower table") != null
 				and pm_btn.call("Place the table again") != null and pm_btn.call("Scene background in AR") != null and _pause.find_child("SceneNext", true, false) == null)
 			var sc_desk: float = stage.get("_ar_scale")
-			pm_tap.call("Floor (life-size)")
+			pm_tap.call("Life-size")
 			await _wait(0.5)
 			pchk.call("Surface -> life-size at once", Game.get_s("surface") == "floor" and float(stage.get("_ar_scale")) > sc_desk * 2.0, "%.2f -> %.2f" % [sc_desk, float(stage.get("_ar_scale"))])
 			(pm_btn.call("Scene background in AR") as Button).button_pressed = true
@@ -2825,10 +3612,10 @@ func _tour_step(dir: String, s: String) -> void:
 			# ---- back to the Studio, while the table is still being moved
 			pause()
 			await _wait(0.5)
-			pm_tap.call("Studio (no camera)")
+			pm_tap.call("Play in place")
 			await _wait(1.0)
 			pchk.call("View -> Studio: at once, the menu stays, the AR choices are gone", _pause != null and stage.mode == Stage.Mode.STUDIO and Game.get_s("ar_mode") == "studio"
-				and pm_btn.call("Desk (mini)") == null and pm_btn.call("Place the table again") == null and (pm_btn.call("Studio (no camera)") as Button).button_pressed)
+				and pm_btn.call("Mini") == null and pm_btn.call("Place the table again") == null and (pm_btn.call("Play in place") as Button).button_pressed)
 			pchk.call("... the move panel is closed and the balls are still where they were", not adj.visible and not stage.adjusting and game.sim.pos == pm_balls)
 			pchk.call("... and the Studio shows the scene chosen for it", str((stage.get("_scene") as Dictionary).get("id", "")) == sc2, str((stage.get("_scene") as Dictionary).get("id", "")))
 			resume()
