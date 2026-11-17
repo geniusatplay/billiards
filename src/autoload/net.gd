@@ -8,15 +8,26 @@ extends Node
 ## password only as a hash; the phone keeps the email and its own key (never the password).
 
 const URL := "https://emeraldvortexgames.com/eb/api.php"
+## Tests point the game at a server on this computer instead (e.g. "http://127.0.0.1:8765/eb/api.php").
+var url := URL
 ## Online version: only players with the same one are matched. Bump it when a match between this version and the
 ## one before could go wrong (rules, physics, what is sent). Before v1.1.13 the full game version was used, so
-## two phones a patch apart (new songs, new gear) never met.
-const ONLINE_VERSION := "net2"
+## two phones a patch apart (new songs, new gear) never met. net3 (v1.1.14): aiming is sent as samples, a shot
+## carries its path, events are numbered; a 1.1.13 phone would also strike a late-reported shot twice.
+const ONLINE_VERSION := "net3"
 
 var fake = null            # tests: an object with handle(action, body) -> Dictionary instead of the real server
 var last_error := ""
 var _save_in := -1.0
 var _saving := false
+## v1.1.14: kept-open connections ("lanes") for the requests of matchmaking and of a match. Opening a secure
+## connection costs about 0.25 s each time; a request on an open one about 0.07 s (measured on the server).
+## Each lane carries one request at a time, in order; "poll" and "send" have one each so they never wait for
+## each other.
+var _lanes := {}
+var lane_opened := 0        # connections opened (tests: kept-open lanes open far fewer than requests made)
+var lane_requests := 0
+var allow_headless := false # tests: talk to a local test server even in a run without a screen
 
 
 func _ready() -> void:
@@ -41,31 +52,38 @@ func _process(delta: float) -> void:
 			push_progress()
 
 
-## One call to the server. Always returns a Dictionary with "ok"; never throws.
-func api(action: String, body: Dictionary = {}) -> Dictionary:
+## One call to the server. Always returns a Dictionary with "ok"; never throws. `lane`: send it on that kept-open
+## connection (matchmaking and match traffic); "" = a fresh connection (everything else, a few times a session).
+func api(action: String, body: Dictionary = {}, lane := "") -> Dictionary:
 	var parsed = null
 	if fake != null:
 		await get_tree().process_frame
 		parsed = fake.handle(action, body)
 	else:
-		if OS.get_cmdline_user_args().has("--offline") or DisplayServer.get_name() == "headless":
+		if OS.get_cmdline_user_args().has("--offline") or (DisplayServer.get_name() == "headless" and not allow_headless):
 			return {"ok": false, "error": "offline"}
-		var req := HTTPRequest.new()
-		req.timeout = 8.0
-		add_child(req)
-		var err := req.request(URL + "?a=" + action, ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
-		if err != OK:
+		var text = null
+		if lane != "":
+			text = await _lane_call(lane, action, JSON.stringify(body))
+		else:
+			var req := HTTPRequest.new()
+			req.timeout = 8.0
+			add_child(req)
+			var err := req.request(url + "?a=" + action, ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
+			if err != OK:
+				req.queue_free()
+				last_error = "offline"
+				return {"ok": false, "error": "offline"}
+			var res: Array = await req.request_completed
 			req.queue_free()
-			last_error = "offline"
-			return {"ok": false, "error": "offline"}
-		var res: Array = await req.request_completed
-		req.queue_free()
-		if int(res[0]) != HTTPRequest.RESULT_SUCCESS:
+			if int(res[0]) == HTTPRequest.RESULT_SUCCESS:
+				text = (res[3] as PackedByteArray).get_string_from_utf8()
+		if text == null:
 			last_error = "offline"
 			return {"ok": false, "error": "offline"}
 		# an empty or broken reply (a dropped connection, a server hiccup) counts as "no answer", quietly
 		var reader := JSON.new()
-		parsed = reader.data if reader.parse((res[3] as PackedByteArray).get_string_from_utf8()) == OK else null
+		parsed = reader.data if reader.parse(str(text)) == OK else null
 	if typeof(parsed) != TYPE_DICTIONARY:
 		last_error = "bad reply"
 		return {"ok": false, "error": "bad reply"}
@@ -78,6 +96,124 @@ func api(action: String, body: Dictionary = {}) -> Dictionary:
 			Game.progress.erase("email")
 			Game.request_save()
 	return parsed
+
+
+# ---------------------------------------------------------------- kept-open connections (v1.1.14)
+class Lane extends RefCounted:
+	var client := HTTPClient.new()
+	var busy := false
+	var to := ""            # the server the open connection goes to
+
+
+func _parts() -> Dictionary:
+	var u := url
+	var tls := u.begins_with("https://")
+	u = u.trim_prefix("https://").trim_prefix("http://")
+	var slash := u.find("/")
+	var hostport := u.substr(0, slash) if slash >= 0 else u
+	var path := u.substr(slash) if slash >= 0 else "/"
+	var port := 443 if tls else 80
+	if ":" in hostport:
+		port = int(hostport.get_slice(":", 1))
+		hostport = hostport.get_slice(":", 0)
+	return {"tls": tls, "host": hostport, "port": port, "path": path}
+
+
+func _lane(name: String) -> Lane:
+	if not _lanes.has(name):
+		_lanes[name] = Lane.new()
+	return _lanes[name]
+
+
+## Opens a lane's connection ahead of its first request (a match's first "aim" then goes straight out).
+func warm(name: String) -> void:
+	if fake != null or OS.get_cmdline_user_args().has("--offline") or (DisplayServer.get_name() == "headless" and not allow_headless):
+		return
+	var ln := _lane(name)
+	if ln.busy:
+		return
+	ln.busy = true
+	ln.client.poll()
+	if ln.client.get_status() == HTTPClient.STATUS_DISCONNECTED:
+		await _lane_connect(ln, _parts())
+	ln.busy = false
+
+
+## One request on a lane: the reply's text, or null. A connection the server (or the phone network) has closed
+## since the last request is noticed when the request fails; it is then reopened and the request made once more.
+## (A repeated "send" can reach the server twice; the other phone drops the copy by its number, see NetMatch.)
+func _lane_call(name: String, action: String, body: String):
+	var ln := _lane(name)
+	while ln.busy:
+		await get_tree().process_frame
+	ln.busy = true
+	lane_requests += 1
+	var parts := _parts()
+	var text = await _lane_try(ln, parts, action, body)
+	if text == null:
+		ln.client.close()
+		text = await _lane_try(ln, parts, action, body)
+		if text == null:
+			ln.client.close()
+	ln.busy = false
+	return text
+
+
+func _lane_connect(ln: Lane, parts: Dictionary) -> bool:
+	ln.client.close()
+	lane_opened += 1
+	ln.to = "%s:%d" % [parts["host"], parts["port"]]
+	var tls_opt: TLSOptions = TLSOptions.client() if parts["tls"] else null
+	if ln.client.connect_to_host(parts["host"], parts["port"], tls_opt) != OK:
+		return false
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 8000:
+		ln.client.poll()
+		var st := ln.client.get_status()
+		if st == HTTPClient.STATUS_CONNECTED:
+			return true
+		if st != HTTPClient.STATUS_RESOLVING and st != HTTPClient.STATUS_CONNECTING:
+			return false
+		await get_tree().process_frame
+	return false
+
+
+func _lane_try(ln: Lane, parts: Dictionary, action: String, body: String):
+	ln.client.poll()
+	if ln.client.get_status() != HTTPClient.STATUS_CONNECTED or ln.to != "%s:%d" % [parts["host"], parts["port"]]:
+		if not await _lane_connect(ln, parts):
+			return null
+	if ln.client.request(HTTPClient.METHOD_POST, str(parts["path"]) + "?a=" + action, ["Content-Type: application/json"], body) != OK:
+		return null
+	var t0 := Time.get_ticks_msec()
+	var got := PackedByteArray()
+	var expect := -1
+	while true:
+		if Time.get_ticks_msec() - t0 > 8000:
+			return null
+		ln.client.poll()
+		var st := ln.client.get_status()
+		if st == HTTPClient.STATUS_REQUESTING:
+			await get_tree().process_frame
+			continue
+		if st == HTTPClient.STATUS_BODY:
+			expect = ln.client.get_response_body_length()
+			var chunk := ln.client.read_response_body_chunk()
+			if chunk.is_empty():
+				await get_tree().process_frame
+			else:
+				got.append_array(chunk)
+			continue
+		if st == HTTPClient.STATUS_CONNECTED:
+			break                  # the whole reply is in; the connection stays open for the next request
+		# closed: fine if the whole reply came first (a server may close after replying), otherwise it failed
+		if not got.is_empty() and (expect < 0 or got.size() >= expect):
+			ln.client.close()
+			break
+		return null
+	if got.is_empty():
+		return null
+	return got.get_string_from_utf8()
 
 
 func registered() -> bool:
@@ -231,7 +367,7 @@ func measure_ping() -> int:
 	var times: Array = []
 	for i in 3:
 		var t0 := Time.get_ticks_msec()
-		var r: Dictionary = await api("ping")
+		var r: Dictionary = await api("ping", {}, "poll")     # (also opens the lane matchmaking and the match use)
 		if r.get("ok", false):
 			times.append(Time.get_ticks_msec() - t0)
 	if times.is_empty():

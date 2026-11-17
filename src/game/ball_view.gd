@@ -126,6 +126,22 @@ func place(p: Vector2) -> void:
 	position = Vector3(p.x, radius, p.y)
 
 
+## Slides the ball to p (v1.1.14: the other player's cue ball in hand, and a ball the shooter's report puts a
+## little elsewhere, move there instead of jumping).
+func glide_to(p: Vector2, seconds := 0.22) -> void:
+	if _tw and _tw.is_valid():
+		_tw.kill()
+	falling = false
+	visible = true
+	scale = Vector3.ONE
+	var to := Vector3(p.x, radius, p.y)
+	if position.distance_to(to) < 1e-5:
+		position = to
+		return
+	_tw = create_tween()
+	_tw.tween_property(self, "position", to, seconds).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
 ## Animate a ball that jumped off the table: keep flying, fall past the table edge, then vanish.
 func fly_off(v: Vector2, h: float, vz: float) -> void:
 	falling = true

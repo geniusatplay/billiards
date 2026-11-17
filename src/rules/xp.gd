@@ -3,7 +3,7 @@ class_name XP
 ##
 ## Randy's rules: XP for every ball you pot; +10% for each further potting shot in the same turn (a streak);
 ## +10% for each extra ball that falls in the same shot (a combo); the 8-ball is worth +120%; winning adds
-## 30% of everything earned in that game. Online matches pay in full, matches against the CPU pay half,
+## 30% of everything earned in that game (at least WIN_MIN, see below). Online matches pay in full, matches against the CPU pay half,
 ## Local Turn Based and Practice pay nothing.
 ## Levels (v1.1.7, Randy: "keep the total xp to reach max level (people will get levels more often)"): 130 levels,
 ## one for each reward, 26 of each rarity. The first costs 78 XP (three plain balls), each next one a little more,
@@ -15,6 +15,11 @@ const STREAK_STEP := 0.10
 const COMBO_STEP := 0.10
 const EIGHT := 55.0            # 25 + 120%
 const WIN_BONUS := 0.30
+## v1.1.14 (Randy: "people still get xp for a match the opponent quits at, counting as a win"): a win is worth at
+## least WIN_MIN, reached once WIN_MIN_SHOTS shots have been played in the match (a quit on the break gives a
+## sixth of it), so leaving at once can't be used to hand a friend XP, and a win with few balls potted still pays.
+const WIN_MIN := 60.0
+const WIN_MIN_SHOTS := 6
 const MAX_LEVEL := 130
 const LEVEL_BASE := 78.0
 const LEVEL_STEP := 2.4727
@@ -99,6 +104,7 @@ class Tracker extends RefCounted:
 	var eight_xp := 0.0
 	var won := false
 	var best_streak := 0
+	var match_shots := 0     # shots played in the match by both players (for the smallest win bonus)
 
 	## After each of the player's shots. `potted`: own balls that went down without a foul.
 	func shot(potted: int, sank_eight := false) -> void:
@@ -125,10 +131,14 @@ class Tracker extends RefCounted:
 	func earned() -> float:
 		return ball_xp + streak_xp + combo_xp + eight_xp
 
+	## The smallest win bonus: WIN_MIN, a sixth of it for each shot of the match up to WIN_MIN_SHOTS.
+	func win_floor() -> float:
+		return XP.WIN_MIN * float(clampi(match_shots, 1, XP.WIN_MIN_SHOTS)) / float(XP.WIN_MIN_SHOTS)
+
 	## The lines of the score screen and the final sum for a mode ("online", "cpu", "local", "practice").
 	func summary(mode: String) -> Dictionary:
 		var f := float(XP.MODE_FACTOR.get(mode, 0.0))
-		var win_xp := earned() * XP.WIN_BONUS if won else 0.0
+		var win_xp := maxf(earned() * XP.WIN_BONUS, win_floor()) if won else 0.0
 		var total := int(round((earned() + win_xp) * f))
 		return {"balls": balls, "ball_xp": int(round(ball_xp * f)), "streak_xp": int(round(streak_xp * f)), "combo_xp": int(round(combo_xp * f)),
 			"eight_xp": int(round(eight_xp * f)), "win_xp": int(round(win_xp * f)), "factor": f, "total": total, "best_streak": best_streak, "mode": mode}

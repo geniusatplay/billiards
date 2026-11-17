@@ -12,6 +12,7 @@ const KEEP := 3
 var ball_r := 0.028575
 var pull := 0.0            # 0..1 visual pull-back (power preview)
 var _strike_t := -1.0
+var _strike_dur := 0.07     # the forward stroke: from where the stick is drawn back to through the ball
 var _idle_t := 0.0
 var _ball := Vector2.ZERO
 var _yaw := 0.0
@@ -83,8 +84,13 @@ func aim(ball: Vector2, yaw: float, elev_deg: float, offset: Vector2, p_pull: fl
 	_update(0.0)
 
 
-func strike_anim() -> void:
+## Starts the stroke from the current draw. Returns when the tip reaches the ball (seconds): the match starts
+## the balls then (v1.1.14; before, the stroke always started at the ball and the ball left before the stick).
+func strike_anim() -> float:
+	var from_gap := 0.004 + pull * 0.22
+	_strike_dur = 0.05 + 0.06 * clampf(pull, 0.0, 1.0)
 	_strike_t = 0.0
+	return _strike_dur * from_gap / (from_gap + 0.012)
 
 
 func _process(delta: float) -> void:
@@ -93,7 +99,7 @@ func _process(delta: float) -> void:
 	_idle_t += delta
 	if _strike_t >= 0.0:
 		_strike_t += delta
-		if _strike_t > 0.45:
+		if _strike_t > _strike_dur + 0.38:
 			_fade = maxf(0.0, _fade - delta * 4.0)
 			if _fade <= 0.0:
 				visible = false
@@ -109,10 +115,10 @@ func _update(_dt: float) -> void:
 	var gap := 0.004 + pull * 0.22
 	if _strike_t >= 0.0:
 		# quick forward stroke through the ball, then recoil
-		var k := clampf(_strike_t / 0.07, 0.0, 1.0)
+		var k := clampf(_strike_t / _strike_dur, 0.0, 1.0)
 		gap = lerpf(gap, -0.012, k)
-		if _strike_t > 0.07:
-			gap = -0.012 + minf((_strike_t - 0.07) * 0.08, 0.02)
+		if _strike_t > _strike_dur:
+			gap = -0.012 + minf((_strike_t - _strike_dur) * 0.08, 0.02)
 	elif pull < 0.01 and not Game.get_s("reduced_motion"):
 		gap += 0.006 + sin(_idle_t * 2.4) * 0.004   # gentle "breathing" while aiming
 	var tip := contact - d * gap

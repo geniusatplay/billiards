@@ -3,9 +3,13 @@ extends Node
 ## One online match, as seen from this phone: it sends this player's events to the server and collects the
 ## other player's. Events arrive in the order they were sent and are never lost while the match lasts.
 ##
-## The events (see PoolGame): "aim" (where the cue points, a few times a second), "place" (cue ball in hand),
-## "shot" (the exact stroke), "result" (how the shot ended: every ball, the rules, the clocks), "over" (the
-## match ended some other way: time ran out, or a player left).
+## The events (see PoolGame): "aim" (how the cue moved: 15 samples a second, sent in small batches), "place"
+## (cue ball in hand), "shot" (the exact stroke, the last moment of aiming, and the path: snapshots of the
+## shooter's table while the balls ran), "result" (how the shot ended: every ball, the rules, the clocks),
+## "over" (the match ended some other way: time ran out, or a player left).
+## v1.1.14: every event carries a number ("q"), so one that arrives twice (a request repeated after a dropped
+## connection) is only used once; the two kinds of request each keep their own connection to the server open
+## (Net.api lanes), which makes each one about four times quicker than opening a new secure connection.
 
 var match_id := 0
 var seat := 0              # 0 breaks
@@ -23,6 +27,9 @@ var _t := 0.0
 var _polling := false
 var _out: Array = []
 var _sending := false
+var _seq := 0              # this phone's events, numbered
+var _last_q := 0           # the other phone's last event taken in
+var dropped := 0           # repeated events left out (tests, log)
 
 
 static func from_reply(r: Dictionary) -> NetMatch:
@@ -37,11 +44,26 @@ static func from_reply(r: Dictionary) -> NetMatch:
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	Net.warm("send")          # the first "aim" of the match finds its connection open
 
 
 ## Queue an event for the other player. Numbers travel exactly (binary), so both tables stay identical.
 func send(type: String, data: Dictionary) -> void:
-	_out.append([type, Marshalls.variant_to_base64(data)])
+	fill(reserve(type), data)
+
+
+## Keeps a place in the queue for an event whose data is not ready yet (the shot, while its path is worked out
+## on another thread): nothing after it goes out before it, so the other phone always gets them in order.
+func reserve(type: String) -> Array:
+	var it := [type, null]
+	_out.append(it)
+	return it
+
+
+func fill(it: Array, data: Dictionary) -> void:
+	_seq += 1
+	data["q"] = _seq
+	it[1] = Marshalls.variant_to_base64(data)
 	_pump()
 
 
@@ -49,13 +71,13 @@ func _pump() -> void:
 	if _sending:
 		return
 	_sending = true
-	while not _out.is_empty() and is_inside_tree():
+	while not _out.is_empty() and is_inside_tree() and _out[0][1] != null:
 		var it: Array = _out[0]
 		var body := Net.creds()
 		body["match"] = match_id
 		body["type"] = it[0]
 		body["data"] = it[1]
-		var r: Dictionary = await Net.api("send", body)
+		var r: Dictionary = await Net.api("send", body, "send")
 		if not is_inside_tree():
 			return
 		if r.get("ok", false):
@@ -69,7 +91,7 @@ func _pump() -> void:
 func close() -> void:
 	set_process(false)
 	var waited := 0.0
-	while is_inside_tree() and not _out.is_empty() and waited < 6.0:
+	while is_inside_tree() and not _out.is_empty() and waited < 8.0:
 		await get_tree().create_timer(0.25).timeout
 		waited += 0.25
 	if is_inside_tree():
@@ -87,7 +109,8 @@ func _process(delta: float) -> void:
 	silent += delta
 	_t -= delta
 	if _t <= 0.0 and not _polling:
-		_t = 0.6 if fast else 1.5
+		# while the other player aims or shoots, ask often (each ask takes ~0.1 s on the kept-open connection)
+		_t = 0.45 if fast else 1.5
 		_poll()
 
 
@@ -96,7 +119,7 @@ func _poll() -> void:
 	var body := Net.creds()
 	body["match"] = match_id
 	body["after"] = _after
-	var r: Dictionary = await Net.api("poll", body)
+	var r: Dictionary = await Net.api("poll", body, "poll")
 	if not is_inside_tree():
 		return
 	if r.get("ok", false):
@@ -104,7 +127,14 @@ func _poll() -> void:
 		for e in r.get("events", []):
 			_after = maxi(_after, int(e["n"]))
 			var d = Marshalls.base64_to_variant(str(e["data"])) if typeof(e["data"]) == TYPE_STRING else {}
-			_in.append({"type": str(e["type"]), "data": d if typeof(d) == TYPE_DICTIONARY else {}})
+			if typeof(d) != TYPE_DICTIONARY:
+				d = {}
+			if d.has("q"):
+				if int(d["q"]) <= _last_q:
+					dropped += 1
+					continue        # the same event again (its request was repeated): already taken in
+				_last_q = int(d["q"])
+			_in.append({"type": str(e["type"]), "data": d})
 		opp_seen = float(r.get("opp_seen", 0))
 		over = bool(r.get("over", false))
 	_polling = false
@@ -144,3 +174,86 @@ static func apply_result(d: Dictionary, sim: PoolSim, rules: EightBall, clocks: 
 	if c.size() == 2:
 		clocks[0] = float(c[0])
 		clocks[1] = float(c[1])
+
+
+# ---------------------------------------------------------------- the path of a shot (v1.1.14)
+## Snapshot spacing in substeps (240 a second): close together in the first half second, where a break has most
+## of its collisions, then every quarter second.
+const PATH_EARLY := 24
+const PATH_LATE := 60
+const PATH_MAX_BYTES := 10000       # compressed; with base64 and the rest of the event it stays under the server's 20,000 characters
+
+
+## Plays a just-struck table on to rest (on its own copy, on a thread) the way this phone's match will play it,
+## and returns snapshots of it on the way: {"path": compressed bytes, "plen": their size, "end": last step}.
+## The other phone takes each snapshot on at the same step of its replay.
+static func make_path(struck: PoolSim) -> Dictionary:
+	var s := struck.clone()
+	s.record_events = false
+	s.step_no = 0
+	var snaps := {0: s.snapshot()}
+	var steps := 0
+	while s.is_moving() and steps < 25 * 240:
+		s._substep(s.substep)
+		steps += 1
+		var every := PATH_EARLY if steps <= 120 else PATH_LATE
+		if steps % every == 0 or not s.is_moving():
+			snaps[steps] = s.snapshot()
+	var keys: Array = snaps.keys()
+	keys.sort()
+	var out := _pack_path(snaps, keys, steps)
+	while out["path"].size() > PATH_MAX_BYTES and keys.size() > 3:
+		# a very long shot: keep every other snapshot (never the first or the last)
+		var thin := [keys[0]]
+		for k in range(1, keys.size() - 1):
+			if k % 2 == 0:
+				thin.append(keys[k])
+		thin.append(keys[keys.size() - 1])
+		keys = thin
+		out = _pack_path(snaps, keys, steps)
+	return out
+
+
+static func _pack_path(snaps: Dictionary, keys: Array, end_step: int) -> Dictionary:
+	var b := StreamPeerBuffer.new()
+	b.put_u32(end_step)
+	b.put_u16(keys.size())
+	for k in keys:
+		var d: PackedByteArray = snaps[k]
+		b.put_u32(k)
+		b.put_u16(d.size())
+		b.put_data(d)
+	var raw := b.data_array
+	return {"path": raw.compress(FileAccess.COMPRESSION_DEFLATE), "plen": raw.size(), "end": end_step}
+
+
+## Gives a replay the shooter's snapshots (from make_path's data, as it came in a "shot" event).
+static func use_path(sim: PoolSim, d: Dictionary) -> bool:
+	drop_path(sim)
+	if typeof(d.get("path")) != TYPE_PACKED_BYTE_ARRAY or int(d.get("plen", 0)) <= 0:
+		return false
+	var raw: PackedByteArray = (d["path"] as PackedByteArray).decompress(int(d["plen"]), FileAccess.COMPRESSION_DEFLATE)
+	if raw.size() != int(d["plen"]):
+		return false
+	var b := StreamPeerBuffer.new()
+	b.data_array = raw
+	var end_step := b.get_u32()
+	var count := b.get_u16()
+	var got_path := {}
+	for _i in count:
+		var k := b.get_u32()
+		var size := b.get_u16()
+		var got: Array = b.get_data(size)
+		if int(got[0]) != OK:
+			return false
+		got_path[k] = got[1]
+	sim.path = got_path
+	sim.path_end = end_step
+	return true
+
+
+## Back to normal (this phone's own shots, practice): no snapshots.
+static func drop_path(sim: PoolSim) -> void:
+	sim.path = {}
+	sim.path_end = -1
+	sim.path_changed.clear()

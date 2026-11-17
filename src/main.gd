@@ -2525,9 +2525,16 @@ func _tour_step(dir: String, s: String) -> void:
 			var say := func(good: bool, what: String):
 				print("  %s  %s" % ["ok  " if good else "FAIL", what])
 				return good
-			for round_no in 3:
+			# rounds: 0 a whole match (the other phone rounds a hair differently, like an iPhone against an Android
+			# phone, and one of its shots reaches the server twice); 1 the other phone - the host this time - leaves
+			# at once; 2 this player leaves; 3 the other phone goes quiet (app closed)
+			for round_no in 4:
 				var ghost = Ghost.new()
-				ghost.join(srv, "Ghost", 9000, Net.ONLINE_VERSION)
+				var g_ping := 1 if round_no == 1 else 9000      # round 1: the other phone has the faster connection
+				ghost.join(srv, "Ghost", g_ping, Net.ONLINE_VERSION)
+				if round_no == 0:
+					ghost.wobble = 1e-6
+					ghost.dup_first_shot = true
 				if round_no == 1:
 					ghost.quit_after = 0      # leaves at its first turn
 				_stack.clear()
@@ -2538,15 +2545,17 @@ func _tour_step(dir: String, s: String) -> void:
 				_screen.call("_search")
 				var waited := 0.0
 				while game == null and waited < 20.0:
-					ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
+					ghost.tick("Ghost", g_ping, Net.ONLINE_VERSION)
 					await _wait(0.1)
 					waited += 0.1
 				if not say.call(game != null and game.online and game.net != null, "round %d: found an opponent and the match started" % (round_no + 1)):
 					on_ok = false
 					break
+				if ghost.match_id == 0:
+					ghost.tick("Ghost", g_ping, Net.ONLINE_VERSION)     # let it pick up its match first
+				if round_no == 1:
+					on_ok = say.call(ghost.host and not game.net.host, "round 2: the other phone hosts this time (this phone: host %s, the other: host %s)" % [game.net.host, ghost.host]) and on_ok
 				if round_no == 0:
-					if ghost.match_id == 0:
-						ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)     # let it pick up its match first
 					on_ok = say.call(game.net.host and not ghost.host, "the faster connection hosts (this phone: host %s, the other: host %s)" % [game.net.host, ghost.host]) and on_ok
 					on_ok = say.call(game.net_seat == 1 - ghost.seat and game.player_names[ghost.seat] == "Ghost", "seats %d / %d, opponent's name shown: %s" % [game.net_seat, ghost.seat, str(game.player_names)]) and on_ok
 					on_ok = say.call(Net.registered() and srv.players.has(str(Game.progress.get("player", ""))), "this install registered itself as a player") and on_ok
@@ -2567,7 +2576,11 @@ func _tour_step(dir: String, s: String) -> void:
 				var my_shots := 0
 				while game != null and game.state != PoolGame.State.OVER and frames < 60000:
 					srv.now = Time.get_ticks_msec() / 1000.0
-					ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
+					if round_no == 3:
+						# the other phone has gone quiet: it last asked the server for news 50 s ago
+						srv.matches[game.net.match_id]["seen"][1 - game.net_seat] = srv.now - 50.0
+					else:
+						ghost.tick("Ghost", g_ping, Net.ONLINE_VERSION)
 					frames += 1
 					if game.plays_here(game.current) and game.state in [PoolGame.State.AIM, PoolGame.State.BALL_IN_HAND]:
 						if round_no == 2 and my_shots >= 1:
@@ -2586,6 +2599,16 @@ func _tour_step(dir: String, s: String) -> void:
 						var pick: Dictionary = ai2.choose(snap2, legal2, own2, legal2 == [8], game.rules.is_break)
 						if round_no == 1:
 							pick = {"yaw": 1.2, "power": 0.03, "offset": Vector2.ZERO, "elev": 0.0}     # a tap that reaches nothing: the turn passes
+						if round_no == 0 and my_shots < 3:
+							# like a person: turn the stick to the shot over a few frames (its aiming goes to the other phone)
+							var y0: float = game.control.yaw
+							for f in 10:
+								game.control.yaw = lerp_angle(y0, float(pick["yaw"]), (f + 1) / 10.0)
+								srv.now = Time.get_ticks_msec() / 1000.0
+								ghost.tick("Ghost", g_ping, Net.ONLINE_VERSION)
+								await get_tree().process_frame
+							if game == null or game.state != PoolGame.State.AIM:
+								continue
 						game.fire(pick["yaw"], pick["power"], pick["offset"], pick["elev"])
 						my_shots += 1
 					elif game.state == PoolGame.State.ROLLING:
@@ -2603,6 +2626,22 @@ func _tour_step(dir: String, s: String) -> void:
 						on_ok = say.call(game.rules.winner >= 0 and game.rules.winner == ghost.rules.winner, "both phones name the same winner (seat %d)" % game.rules.winner) and on_ok
 						on_ok = say.call(ghost.drift == 0 and ghost.shots_seen == my_shots, "the other phone replayed all %d of this phone's shots to exactly the same table" % ghost.shots_seen) and on_ok
 						on_ok = say.call(game.net_drift == 0, "this phone replayed all %d of the other phone's shots to exactly the same table" % ghost.shots_sent) and on_ok
+						# v1.1.14
+						on_ok = say.call(game.net_path_fixes > 0 and ghost.path_fixes > 0 and game.net_drift == 0 and ghost.drift == 0,
+							"the other phone rounds a hair differently (like an iPhone against an Android phone): each side's snapshots kept the other's balls on their paths (%d and %d corrections), and no shot ended differently" % [game.net_path_fixes, ghost.path_fixes]) and on_ok
+						var worst_yaw := 0.0
+						var worst_pull := 0.0
+						for lu in game.remote_lineup:
+							worst_yaw = maxf(worst_yaw, float(lu[0]))
+							worst_pull = maxf(worst_pull, float(lu[1]))
+						on_ok = say.call(game.remote_lineup.size() == ghost.shots_sent and worst_yaw < 0.002 and worst_pull < 0.01,
+							"the other player's stick ended exactly on their stroke every time (%d strokes; worst gap %.4f rad, draw %.3f)" % [game.remote_lineup.size(), worst_yaw, worst_pull]) and on_ok
+						on_ok = say.call(game.remote_max_step < 0.5,
+							"their aiming was played back smoothly (the stick never turned more than %.3f rad between two frames, at this test's few frames a second)" % game.remote_max_step) and on_ok
+						on_ok = say.call(ghost.aims_seen > 0 and ghost.aim_samples > ghost.aims_seen and ghost.trail_ok == ghost.shots_seen,
+							"this phone's aiming reached the other phone (%d samples, %d batches), and ended on the stroke for all %d shots" % [ghost.aim_samples, ghost.aims_seen, ghost.trail_ok]) and on_ok
+						on_ok = say.call(game.net != null and game.net.dropped >= 1, "a shot that reached the server twice was used once (%d repeat left out)" % (game.net.dropped if game.net else -1)) and on_ok
+						on_ok = say.call(srv.biggest_event < 20000, "the biggest event (a shot with its path) was %d characters; the server takes 20,000" % srv.biggest_event) and on_ok
 						var same := true
 						for i in game.sim.n:
 							same = same and game.sim.st[i] == ghost.sim.st[i] and (game.sim.st[i] == PoolSim.ST_POCKETED or game.sim.pos[i].distance_to(ghost.sim.pos[i]) < 1e-9)
@@ -2618,7 +2657,10 @@ func _tour_step(dir: String, s: String) -> void:
 					1:
 						await _wait(1.4)
 						on_ok = say.call(game != null and game.state == PoolGame.State.OVER and game.rules.winner == game.net_seat and _results != null and str(_results.get("res").get("reason", "")) == "Your opponent left the match",
-							"the opponent leaves -> this player wins, with the reason shown") and on_ok
+							"the opponent (the host) leaves -> this player wins, with the reason shown") and on_ok
+						var x1: Dictionary = _results.get("res").get("xp", {}) if _results else {}
+						on_ok = say.call(int(x1.get("total", 0)) >= 10 and int(x1.get("win_xp", 0)) >= 10,
+							"... and gets XP for the win, though nothing was potted (+%d, win bonus %d)" % [int(x1.get("total", 0)), int(x1.get("win_xp", 0))]) and on_ok
 					2:
 						var mid2: int = game.net.match_id
 						quit_to("menu")
@@ -2636,6 +2678,21 @@ func _tour_step(dir: String, s: String) -> void:
 										var od: Dictionary = Marshalls.base64_to_variant(str(ev["data"]))
 										told = int(od.get("winner", -1)) == ghost.seat
 						on_ok = say.call(told and game == null, "this player leaves -> the other phone is told it has won (after %.2f s; events: %s)" % [left_wait, kinds]) and on_ok
+					3:
+						await _wait(1.4)
+						var x3: Dictionary = _results.get("res").get("xp", {}) if _results else {}
+						on_ok = say.call(game != null and game.state == PoolGame.State.OVER and game.rules.winner == game.net_seat and int(x3.get("total", 0)) >= 10,
+							"the other phone goes quiet (app closed) -> this player wins after 45 s, with XP (+%d)" % int(x3.get("total", 0))) and on_ok
+						for i in 10:
+							await _wait(0.1)      # (the message to the server goes out in the background)
+						var told_away := false
+						for ev in srv.events:
+							if game and ev["match"] == game.net.match_id and ev["type"] == "over":
+								var od3: Dictionary = Marshalls.base64_to_variant(str(ev["data"]))
+								told_away = int(od3.get("winner", -1)) == game.net_seat and str(od3.get("why", "")) == "away"
+						ghost.tick("Ghost", g_ping, Net.ONLINE_VERSION)       # it comes back
+						on_ok = say.call(told_away and ghost.rules.winner == game.net_seat,
+							"... and the server is told, so that phone, when it comes back, shows the match as lost (not as a second win)") and on_ok
 				_close_overlays()
 				_end_match()
 				await _wait(0.3)

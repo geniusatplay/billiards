@@ -25,14 +25,30 @@ var xp_track: XP.Tracker     # counts this phone's player's XP (matches only)
 var net: NetMatch            # the link to the other phone (online matches)
 var _remote_result := {}     # how the other player's shot ended, as their phone reported it
 var _await_result := false   # our copy of their shot has stopped; waiting for their report
-var _remote_aim := {}
 var _late := 0.0             # how long the other player's clock has been at zero without their phone reporting it
 var _net_q: Array = []       # the other player's events, in order, not yet played back
 var _catch_up := false       # this phone is behind the other player: replay briskly
 var net_drift := 0           # shots of the other player that ended differently here than on their phone
 var _rest_sum := 0           # fingerprint of the table at the moment the balls stopped
+# ---- online, v1.1.14 (Randy: "make the game smooth and the opponent's pool stick & strike & balls all line up
+# properly for both players"). This player's aiming is sampled 15 times a second and sent in small batches; the
+# other phone plays it back a moment behind, smoothly, and the last sample is the stroke itself.
+var _aim_clock := 0.0                       # seconds into this turn's aiming
+var _aim_tick := 0.0
+var _aim_pending := PackedFloat32Array()    # samples not sent yet, 6 numbers each: t, yaw, elev, tip x, tip y, pull
+var _aim_last := PackedFloat32Array()
 var _aim_send_t := 0.0
-var _aim_sent := ""
+var _aim_buf := PackedFloat32Array()        # the other player's samples, being played back
+var _aim_cursor := -1.0                     # where the playback is, in their seconds
+var _remote_shot := {}                      # their stroke: struck when the playback reaches its last sample
+var _path_thread: Thread                    # this phone's shot: its path for the other phone, on a thread
+var _path_slot: Array = []                  # the shot's place in the send queue
+var _path_shot := {}
+var _stroke_wait := 0.0                     # the stick is still on its way to the ball: the balls wait for it
+var net_path_fixes := 0                     # (tests, log) snapshots that put this phone's replay right
+var remote_lineup: Array = []               # (tests) per stroke of theirs: [yaw gap, pull gap] of the stick at the strike
+var remote_max_step := 0.0                  # (tests) the biggest turn of their stick between two frames (radians)
+var _aim_started := false                   # their playback has drawn its first frame
 var rules: EightBall
 var sim: PoolSim
 var stage: Stage
@@ -328,6 +344,8 @@ func _start_turn(first := false) -> void:
 	cue_view.set_skin(cue_skins[current])     # whoever is at the table holds their own cue
 	FpsCounter.mark("turn starts")
 	turn_started.emit(current, info)
+	if online and is_human_turn():
+		_reset_aim_stream()
 	if info["ball_in_hand"] and is_human_turn():
 		placing_cue = true
 		_set_state(State.BALL_IN_HAND)
@@ -419,6 +437,8 @@ func _respot_eight() -> void:
 func _process(delta: float) -> void:
 	if sim == null or _warming:
 		return
+	if _path_thread and not _path_thread.is_alive():
+		_send_shot()
 	if online:
 		_net_tick(delta)
 		if state == State.OVER:
@@ -434,10 +454,10 @@ func _process(delta: float) -> void:
 				control.tick(delta)
 				_update_aim_visuals()
 				if online:
-					_send_aim(delta)
+					_sample_aim(delta)
 		State.AI_THINK:
 			if online:
-				if _ai_result.is_empty() and not _await_result:
+				if _ai_result.is_empty() and _remote_shot.is_empty() and not _await_result:
 					_tick_clock(delta)      # the other player is thinking: their clock runs here too
 				_update_remote(delta)
 			else:
@@ -514,12 +534,19 @@ func _update_aim_visuals() -> void:
 func _physics_process(delta: float) -> void:
 	if state != State.ROLLING or sim == null:
 		return
+	if _stroke_wait > 0.0:
+		# v1.1.14: the stick travels from where it was drawn back to the ball; the balls start when it gets there
+		_stroke_wait -= delta
+		if _stroke_wait > 0.0:
+			return
 	sim.advance(delta * time_scale)
 	Sfx.set_scene_scale(stage.table_scale())
 	_consume_events()
+	if not sim.path_changed.is_empty():
+		_follow_path_changes()
 	_update_roll_sound()
 	_sync_views(delta * time_scale)
-	if not sim.is_moving():
+	if not sim.is_moving() and not sim.replay_pending():
 		_on_balls_stopped()
 
 
@@ -691,24 +718,53 @@ func fire(yaw: float, power: float, offset: Vector2, elev: float) -> void:
 	undo_sim = sim.clone()
 	cue_start = cue_ball_pos()
 	elev = maxf(elev, min_elevation(yaw, offset))
-	if online and plays_here(current):
-		net.send("shot", {"n": shots_total + 1, "yaw": yaw, "power": power, "offset": offset, "elev": elev, "cue": cue_start, "pre": NetMatch.table_sum(sim)})
-	if online and not plays_here(current) and _ai_result.has("pre") and int(_ai_result["pre"]) != NetMatch.table_sum(sim):
+	var mine_online := online and plays_here(current)
+	var theirs := online and not plays_here(current)
+	var pre := NetMatch.table_sum(sim)
+	# the stick strikes from where it is drawn back to (before v1.1.14 it jumped to the ball first)
+	var from_pull := clampf(cue_view.pull, 0.0, 1.0)
+	if mine_online:
+		# the last sample of this player's aiming is the stroke itself: the other phone's stick ends exactly here
+		_take_aim_sample(yaw, elev, offset, from_pull, true)
+		_path_shot = {"n": shots_total + 1, "yaw": yaw, "power": power, "offset": offset, "elev": elev, "cue": cue_start, "pre": pre, "trail": _aim_pending}
+		_aim_pending = PackedFloat32Array()
+		_path_slot = net.reserve("shot")       # (filled once its path is worked out, see _send_shot)
+	var their_shot := _remote_shot if not _remote_shot.is_empty() else _ai_result
+	if theirs and their_shot.has("pre") and int(their_shot["pre"]) != pre:
 		net_drift += 1
 		print("[net] the tables differed before the other player's shot %d" % (shots_total + 1))
+	if theirs:
+		NetMatch.use_path(sim, their_shot)     # their snapshots: this replay follows their table exactly
+	else:
+		NetMatch.drop_path(sim)
+	_remote_shot = {}
+	_aim_buf = PackedFloat32Array()
+	_aim_started = false
+	if theirs:
+		# their stroke is used up. (Before v1.1.14 it stayed, and if their report of how it ended was slow to
+		# come, the waiting phone struck the same stroke a second time.)
+		_ai_result = {}
 	potted_this_shot.clear()
 	jumped_this_shot.clear()
 	sim.events.clear()
 	rules.snapshot_before_shot(sim)
-	cue_view.aim(cue_start, yaw, elev, offset, 0.0)
-	cue_view.strike_anim()
+	cue_view.aim(cue_start, yaw, elev, offset, from_pull)
+	_stroke_wait = cue_view.strike_anim()
 	aim_guide.hide_guide()
 	Game.vibrate(int(12 + power * 25))
 	sim.strike(cue_index(), yaw, power, offset, elev)   # the break may be struck harder (PoolSim.break_scale)
+	if mine_online:
+		# the other phone gets snapshots of this shot's table on the way to rest; working them out takes a
+		# moment (a break: ~0.05 s here, longer on a phone), so it is done on a thread
+		var struck := sim.clone()
+		_path_thread = Thread.new()
+		_path_thread.start(func(): return NetMatch.make_path(struck))
 	_set_break(false)
 	shots_total += 1
 	Game.bump_stat("shots")
-	time_scale = 3.0 if (online and _catch_up and not plays_here(current)) else 1.0
+	time_scale = 3.0 if (theirs and _catch_up) else 1.0
+	if theirs and _catch_up:
+		_stroke_wait = 0.0
 	_catch_up = false
 	_rolling_time = 0.0
 	_set_state(State.ROLLING)
@@ -735,6 +791,12 @@ func _on_balls_stopped() -> void:
 			Game.bump_stat("pots")
 	if online:
 		_rest_sum = NetMatch.table_sum(sim)
+		if sim.path_end >= 0:
+			net_path_fixes += sim.path_fixes
+			if sim.path_fixes > 0:
+				print("[net] shot %d: %d of the other phone's snapshots put this replay right" % [shots_total, sim.path_fixes])
+			sim.path_fixes = 0
+		NetMatch.drop_path(sim)
 	if mode == "versus":
 		_resolve_versus()
 	else:
@@ -829,7 +891,11 @@ func _finish(winner: int, reason: String) -> void:
 		"reason": reason, "shots": shots_total, "vs_ai": vs_ai, "ai_level": ai_level, "online": online, "seat": local_seat()}
 	if xp_track:
 		xp_track.won = winner == local_seat()
+		xp_track.match_shots = shots_total
 		info["xp"] = xp_track.summary(xp_mode())
+	if online and net:
+		print("[net] match over (%s): %d requests on %d connections; %d snapshots put replays right; %d repeated events left out; XP %s" % [
+			reason, Net.lane_requests, Net.lane_opened, net_path_fixes, net.dropped, str(info.get("xp", {}).get("total", 0))])
 	game_over.emit(info)
 
 
@@ -985,7 +1051,10 @@ func _start_remote() -> void:
 	_ai_result = {}
 	_ai_anim = 0.0
 	_ai_from_yaw = control.yaw
-	_remote_aim = {}
+	_aim_buf = PackedFloat32Array()
+	_aim_cursor = -1.0
+	_remote_shot = {}
+	_aim_started = false
 
 
 ## Every frame of an online match: take in what the other phone sent, notice a lost connection.
@@ -993,37 +1062,52 @@ func _start_remote() -> void:
 ## it (their next stroke waits until the replay of the one before has finished), so nothing is ever skipped
 ## even when they shoot faster than this phone can show it.
 func _net_tick(_delta: float) -> void:
-	net.fast = state == State.ROLLING or not plays_here(current)
+	net.fast = not plays_here(current)       # quick questions only while the other player aims or shoots
 	_net_q.append_array(net.take())
 	while not _net_q.is_empty() and state != State.OVER:
 		var ev: Dictionary = _net_q[0]
 		var d: Dictionary = ev["data"]
-		var ready := not plays_here(current) and state == State.AI_THINK and _ai_result.is_empty() and not _await_result
+		var ready := not plays_here(current) and state == State.AI_THINK and _ai_result.is_empty() and _remote_shot.is_empty() and not _await_result
 		match str(ev["type"]):
 			"over":
+				# the match ended on the other phone: they left (we win), they saw this phone go quiet for too
+				# long (we lose), or a clock ran out. Who hosts makes no difference.
 				var w := int(d.get("winner", net_seat))
 				rules.winner = w
-				_finish(w, L.t("%s ran out of time") % player_names[1 - w] if str(d.get("why", "")) == "time" else "Your opponent left the match")
+				var why := str(d.get("why", ""))
+				var reason := "Your opponent left the match" if w == net_seat else "The connection was lost"
+				if why == "time":
+					reason = L.t("%s ran out of time") % player_names[1 - w]
+				_finish(w, reason)
 			"aim":
-				_remote_aim = d
+				# how their cue moved (only for the turn being played: older batches are dropped)
+				if not plays_here(current) and int(d.get("turn", shots_total)) == shots_total:
+					_aim_feed(d.get("s"))
 			"place":
 				if not ready:
 					return
 				if d.has("p"):
-					_put_cue(d["p"])
+					_put_cue(d["p"], true)
 			"shot":
 				if not ready:
 					return
 				if d.has("cue"):
 					_put_cue(d["cue"])
-				_ai_result = {"yaw": float(d["yaw"]), "power": float(d["power"]), "offset": d["offset"], "elev": float(d["elev"])}
-				if d.has("pre"):
-					_ai_result["pre"] = d["pre"]
-				_ai_from_yaw = control.yaw
 				# running behind (their next stroke is already here)? then show this one briskly
 				var behind := _net_q.any(func(x): return x != ev and str(x["type"]) == "shot")
-				_ai_anim = 1.35 if behind else 0.55
 				_catch_up = behind
+				_aim_feed(d.get("trail"))
+				if _aim_buf.is_empty():
+					# none of their aiming came (an older version, a lost batch): the stick turns to the shot
+					# and draws back by itself, then strikes
+					_ai_result = {"yaw": float(d["yaw"]), "power": float(d["power"]), "offset": d["offset"], "elev": float(d["elev"])}
+					for k in ["pre", "path", "plen"]:
+						if d.has(k):
+							_ai_result[k] = d[k]
+					_ai_from_yaw = control.yaw
+					_ai_anim = 1.35 if behind else 0.55
+				else:
+					_remote_shot = d          # struck when the playback of their aiming gets to its end
 			"result":
 				if not _await_result:
 					return      # our replay of that shot is still running
@@ -1036,57 +1120,170 @@ func _net_tick(_delta: float) -> void:
 	if state == State.OVER:
 		return
 	if net.opp_seen > 45.0:
+		# the other phone stopped asking the server for news (app closed, phone off): this player wins. The
+		# server is told too, so that phone - should it come back - shows the match as lost, not as a second win.
 		rules.winner = net_seat
+		net.send("over", {"winner": net_seat, "why": "away"})
 		_finish(net_seat, "Your opponent left the match")
 	elif net.silent > 45.0:
 		rules.winner = 1 - net_seat
 		_finish(1 - net_seat, "The connection was lost")
 
 
-## The cue ball exactly where the other phone has it.
-func _put_cue(p: Vector2) -> void:
+## The cue ball exactly where the other phone has it (glide: it slides there, for their ball in hand).
+func _put_cue(p: Vector2, glide := false) -> void:
 	var c := cue_index()
+	var was_on: bool = sim.st[c] != PoolSim.ST_POCKETED and views[c].visible
 	sim.pos[c] = p
 	sim.vel[c] = Vector2.ZERO
 	sim.spin[c] = Vector3.ZERO
 	sim.st[c] = PoolSim.ST_REST
 	sim.pocket_of[c] = -1
-	views[c].place(p)
+	if glide and was_on:
+		views[c].glide_to(p)
+	else:
+		views[c].place(p)
 
 
-## While the other player aims, their cue follows what their phone reports; then their shot plays out.
+## While the other player aims, their stick moves as theirs did: their samples are played back at their own
+## pace, a moment behind (so a late batch doesn't make it stop and start). When their stroke has come, the
+## playback runs on to its end - the stroke's own aim and draw - and the stick strikes from there.
 func _update_remote(delta: float) -> void:
+	if _await_result:
+		return
 	if not _ai_result.is_empty():
 		_update_ai(delta)
 		return
-	if _await_result:
-		return
-	if not _remote_aim.is_empty():
-		control.yaw = lerp_angle(control.yaw, float(_remote_aim.get("yaw", control.yaw)), clampf(delta * 6.0, 0.0, 1.0))
-		var off: Vector2 = _remote_aim.get("offset", Vector2.ZERO)
-		cue_view.aim(cue_ball_pos(), control.yaw, maxf(float(_remote_aim.get("elev", 0.0)), min_elevation(control.yaw, off)), off, float(_remote_aim.get("pull", 0.0)))
-	else:
+	if _aim_buf.is_empty():
 		cue_view.aim(cue_ball_pos(), control.yaw, min_elevation(control.yaw, Vector2.ZERO), Vector2.ZERO, 0.0)
+		return
+	var newest: float = _aim_buf[_aim_buf.size() - 6]
+	var behind := newest - _aim_cursor
+	var rate := 1.0
+	if not _remote_shot.is_empty():
+		rate = 3.0 if _catch_up else (2.0 if behind > 0.6 else 1.25)
+	elif behind > 0.9:
+		rate = 1.5                 # fallen behind (a slow answer from the server): catch up gently
+	_aim_cursor = minf(_aim_cursor + delta * rate, newest)
+	var a := _aim_at(_aim_cursor)
+	if _aim_started:
+		remote_max_step = maxf(remote_max_step, absf(wrapf(float(a[0]) - control.yaw, -PI, PI)))
+	_aim_started = true
+	control.yaw = a[0]
+	var off := Vector2(a[2], a[3])
+	cue_view.aim(cue_ball_pos(), a[0], maxf(a[1], min_elevation(a[0], off)), off, a[4])
+	if not _remote_shot.is_empty() and _aim_cursor >= newest:
+		var sh := _remote_shot
+		remote_lineup.append([absf(wrapf(float(a[0]) - float(sh["yaw"]), -PI, PI)), absf(float(a[4]) - float(sh["power"]))])
+		fire(float(sh["yaw"]), float(sh["power"]), sh["offset"], float(sh["elev"]))
 
 
-## Twice a second, tell the other phone where this player's cue points (only when it moved).
-func _send_aim(delta: float) -> void:
+## Takes in a batch of the other player's samples (only ones newer than what is there).
+func _aim_feed(samples) -> void:
+	if typeof(samples) != TYPE_PACKED_FLOAT32_ARRAY or samples.size() < 6:
+		return
+	var last_t := -INF if _aim_buf.is_empty() else float(_aim_buf[_aim_buf.size() - 6])
+	for k in range(0, samples.size() - 5, 6):
+		if samples[k] > last_t:
+			if _aim_buf.is_empty():
+				_aim_cursor = samples[k]
+			_aim_buf.append_array(samples.slice(k, k + 6))
+			last_t = samples[k]
+	# what has been played is let go (the sample just before the playback point is kept)
+	while _aim_buf.size() >= 12 and _aim_buf[6] <= _aim_cursor:
+		_aim_buf = _aim_buf.slice(6)
+
+
+## Their stick at their time t: [yaw, elevation, tip x, tip y, pull], between the two samples around t.
+func _aim_at(t: float) -> Array:
+	var count := _aim_buf.size() / 6
+	var i := 0
+	while i + 1 < count and _aim_buf[(i + 1) * 6] <= t:
+		i += 1
+	var a := i * 6
+	if i + 1 >= count:
+		return [_aim_buf[a + 1], _aim_buf[a + 2], _aim_buf[a + 3], _aim_buf[a + 4], _aim_buf[a + 5]]
+	var b := a + 6
+	var k := clampf((t - _aim_buf[a]) / maxf(_aim_buf[b] - _aim_buf[a], 1e-4), 0.0, 1.0)
+	return [lerp_angle(_aim_buf[a + 1], _aim_buf[b + 1], k), lerpf(_aim_buf[a + 2], _aim_buf[b + 2], k),
+		lerpf(_aim_buf[a + 3], _aim_buf[b + 3], k), lerpf(_aim_buf[a + 4], _aim_buf[b + 4], k), lerpf(_aim_buf[a + 5], _aim_buf[b + 5], k)]
+
+
+## This player's aiming, 15 samples a second (only when something moved), sent every 0.4 s.
+func _sample_aim(delta: float) -> void:
+	_aim_clock += delta
+	_aim_tick -= delta
+	if _aim_tick <= 0.0:
+		_aim_tick = maxf(_aim_tick + 1.0 / 15.0, 0.0)
+		_take_aim_sample(control.yaw, cue_elevation(), control.offset, control.power)
 	_aim_send_t -= delta
-	if _aim_send_t > 0.0:
-		return
-	_aim_send_t = 0.5
-	var sig := "%.3f %.2f %.2f %.2f %.2f" % [control.yaw, control.elevation, control.offset.x, control.offset.y, control.power]
-	if sig == _aim_sent:
-		return
-	_aim_sent = sig
-	net.send("aim", {"yaw": control.yaw, "elev": control.elevation, "offset": control.offset, "pull": control.power})
+	if _aim_send_t <= 0.0 and not _aim_pending.is_empty():
+		_aim_send_t = 0.4
+		net.send("aim", {"s": _aim_pending, "turn": shots_total})
+		_aim_pending = PackedFloat32Array()
 
 
-## Every ball's picture where the simulator has the ball (after adopting the other phone's report).
+func _take_aim_sample(yaw: float, elev: float, off: Vector2, pull: float, always := false) -> void:
+	if not always and _aim_last.size() == 6 and absf(wrapf(yaw - _aim_last[1], -PI, PI)) < 0.0004 and absf(elev - _aim_last[2]) < 0.05 \
+			and absf(off.x - _aim_last[3]) < 0.004 and absf(off.y - _aim_last[4]) < 0.004 and absf(pull - _aim_last[5]) < 0.003:
+		return
+	if _aim_last.size() == 6 and _aim_clock - _aim_last[0] > 0.1:
+		# it had been still: that pose is held until a moment ago, so the other stick doesn't drift through the pause
+		var hold := _aim_last.duplicate()
+		hold[0] = _aim_clock - 1.0 / 15.0
+		_aim_pending.append_array(hold)
+	_aim_last = PackedFloat32Array([_aim_clock, yaw, elev, off.x, off.y, pull])
+	_aim_pending.append_array(_aim_last)
+
+
+## A new turn of this player online: their aiming starts afresh.
+func _reset_aim_stream() -> void:
+	_aim_clock = 0.0
+	_aim_tick = 0.0
+	_aim_pending = PackedFloat32Array()
+	_aim_last = PackedFloat32Array()
+	_aim_send_t = 0.15
+
+
+## This phone's shot, with its path, goes out (in its place in the queue) once the thread has worked it out.
+func _send_shot() -> void:
+	var p: Dictionary = _path_thread.wait_to_finish()
+	_path_thread = null
+	var d := _path_shot
+	d.merge(p)
+	_path_shot = {}
+	if net and not _path_slot.is_empty():
+		net.fill(_path_slot, d)
+	_path_slot = []
+
+
+## A snapshot of the shooter's table put a ball into a pocket that went in a hair differently here (or kept one
+## out that dropped here): its picture follows, and so does what this shot potted.
+func _follow_path_changes() -> void:
+	for i in sim.path_changed:
+		if sim.st[i] == PoolSim.ST_POCKETED:
+			if sim.pocket_of[i] >= 0:
+				views[i].drop_into(sim.table.pockets[sim.pocket_of[i]]["hole"])
+				potted_this_shot.append({"number": sim.num[i], "pocket": sim.pocket_of[i], "index": i})
+			else:
+				views[i].visible = false
+				if not sim.num[i] in jumped_this_shot:
+					jumped_this_shot.append(sim.num[i])
+		else:
+			views[i].place(sim.pos[i])
+			potted_this_shot = potted_this_shot.filter(func(x): return int(x["index"]) != i)
+			jumped_this_shot.erase(sim.num[i])
+	sim.path_changed.clear()
+
+
+## Every ball's picture where the simulator has the ball (after adopting the other phone's report). A ball that
+## is off by a little slides there instead of jumping.
 func _resync_views() -> void:
 	for i in sim.n:
 		if sim.st[i] == PoolSim.ST_POCKETED:
 			views[i].visible = false
+		elif views[i].visible and not views[i].falling:
+			views[i].glide_to(sim.pos[i])
 		else:
 			views[i].place(sim.pos[i])
 
@@ -1134,6 +1331,8 @@ func _update_ai(delta: float) -> void:
 func _exit_tree() -> void:
 	if _ai_thread:
 		_ai_thread.wait_to_finish()
+	if _path_thread:
+		_send_shot()              # the shot goes out before the leaving message (which follows it in the queue)
 	if online and net:
 		if state != State.OVER:
 			net.send("over", {"winner": 1 - net_seat, "why": "left"})    # walking away from a live match gives it up

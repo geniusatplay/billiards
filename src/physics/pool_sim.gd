@@ -84,6 +84,20 @@ var cushion_after_contact := false
 var _memo_cue := []
 var _memo_ball := []
 
+# ---- online replay (v1.1.14) ----
+## Substeps since the last strike. The shooting phone numbers its snapshots of the table by it.
+var step_no := 0
+## The shooter's table while the shot ran, step -> snapshot (see NetMatch.make_path). The other phone's replay
+## takes each one on the moment it reaches that step, so both tables move together even where two phones
+## calculate a hair apart (an iPhone and an Android phone round some maths differently, and every collision of
+## a break makes such a hair bigger).
+var path := {}
+var path_end := -1                 # the step the shooter's balls stopped at (-1: no path)
+var path_fixes := 0                # snapshots that differed from this phone's own replay (tests, log)
+var path_changed: Array = []       # balls a snapshot put into a pocket or back on the table (the game's pictures)
+## A double-precision engine build keeps vectors in doubles; the snapshots then carry doubles too.
+static var _wide := Vector2(1.0 + 1e-12, 0.0).x != 1.0
+
 
 func _init(p_table: TableGeom = null) -> void:
 	table = p_table if p_table != null else TableGeom.new()
@@ -181,6 +195,9 @@ func strike(i: int, yaw: float, power: float, offset := Vector2.ZERO, elevation_
 	first_hit = -1
 	cushion_after_contact = false
 	_emit({"type": "cue", "ball": i, "speed": speed})
+	step_no = 0
+	if path_end >= 0 and path.has(0):
+		_restore(path[0])         # the struck ball leaves exactly as on the shooter's phone
 
 
 # ======================================================================
@@ -335,17 +352,31 @@ func is_moving() -> bool:
 func advance(dt: float) -> bool:
 	var steps := maxi(1, int(round(dt / substep)))
 	for _s in steps:
-		if not is_moving():
+		if not is_moving() and not replay_pending():
 			return false
 		_substep(substep)
-	return is_moving()
+		_stepped()
+	return is_moving() or replay_pending()
+
+
+## Online: the shooter's snapshots go on to a later step (this replay must keep going even if its own balls
+## have stopped a moment early).
+func replay_pending() -> bool:
+	return path_end >= 0 and step_no < path_end
+
+
+func _stepped() -> void:
+	step_no += 1
+	if path_end >= 0 and path.has(step_no):
+		_restore(path[step_no])
 
 
 ## Run until everything stops (or max_time). Used by AI / solver / preview.
 func run_to_rest(max_time := 25.0) -> void:
 	var t0 := time
-	while is_moving() and time - t0 < max_time:
+	while (is_moving() or replay_pending()) and time - t0 < max_time:
 		_substep(substep)
+		_stepped()
 	if is_moving():
 		for i in n:
 			if st[i] == ST_MOVING:
@@ -872,3 +903,82 @@ func cue_index() -> int:
 			return i
 	return -1
 
+
+# ======================================================================
+# Snapshots (online play, v1.1.14)
+# ======================================================================
+## The whole table as it is now, exactly (binary, no rounding): each ball's place, state and pocket, and the
+## motion of the balls that move. About 30 bytes a ball at rest, 70 moving.
+func snapshot() -> PackedByteArray:
+	var b := StreamPeerBuffer.new()
+	b.put_u8(n)
+	for i in n:
+		var moving := vel[i] != Vector2.ZERO or spin[i] != Vector3.ZERO or hz[i] != 0.0 or vz[i] != 0.0
+		b.put_u8(1 if moving else 0)
+		b.put_8(st[i])
+		b.put_8(pocket_of[i])
+		_put_r(b, pos[i].x)
+		_put_r(b, pos[i].y)
+		if moving:
+			_put_r(b, vel[i].x)
+			_put_r(b, vel[i].y)
+			_put_r(b, spin[i].x)
+			_put_r(b, spin[i].y)
+			_put_r(b, spin[i].z)
+			b.put_double(hz[i])
+			b.put_double(vz[i])
+	b.put_8(first_hit)
+	b.put_u8(1 if cushion_after_contact else 0)
+	return b.data_array
+
+
+## Takes the table on from a snapshot. Balls that this changes from on the table to in a pocket (or back) are
+## listed in path_changed for the game's pictures; path_fixes counts snapshots that changed anything at all.
+func _restore(data: PackedByteArray) -> void:
+	var b := StreamPeerBuffer.new()
+	b.data_array = data
+	if b.get_u8() != n:
+		return
+	var changed := false
+	n_air = 0
+	for i in n:
+		var moving := b.get_u8() == 1
+		var s_new := b.get_8()
+		var p_new := b.get_8()
+		var p := Vector2(_get_r(b), _get_r(b))
+		var v := Vector2.ZERO
+		var w := Vector3.ZERO
+		var h := 0.0
+		var hv := 0.0
+		if moving:
+			v = Vector2(_get_r(b), _get_r(b))
+			w = Vector3(_get_r(b), _get_r(b), _get_r(b))
+			h = b.get_double()
+			hv = b.get_double()
+		if (s_new == ST_POCKETED) != (st[i] == ST_POCKETED):
+			path_changed.append(i)
+		changed = changed or s_new != st[i] or p != pos[i] or v != vel[i] or w != spin[i] or h != hz[i] or hv != vz[i]
+		st[i] = s_new
+		pocket_of[i] = p_new
+		pos[i] = p
+		vel[i] = v
+		spin[i] = w
+		hz[i] = h
+		vz[i] = hv
+		if h > 0.0 or hv != 0.0:
+			n_air += 1
+	first_hit = b.get_8()
+	cushion_after_contact = b.get_u8() == 1
+	if changed:
+		path_fixes += 1
+
+
+static func _put_r(b: StreamPeerBuffer, x: float) -> void:
+	if _wide:
+		b.put_double(x)
+	else:
+		b.put_float(x)
+
+
+static func _get_r(b: StreamPeerBuffer) -> float:
+	return b.get_double() if _wide else b.get_float()
