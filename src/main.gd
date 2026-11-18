@@ -1062,6 +1062,564 @@ func _wait(t: float) -> void:
 	await get_tree().create_timer(t).timeout
 
 
+# ================================================================== store screenshots (v1.1.15)
+## Twenty pictures for Google Play and the App Store, drawn by the game itself: `--only=store [--shots=01,05]`, run
+## once per size (--resolution 2560x1440 Google Play, 2868x1320 iPhone 6.9", 2752x2064 iPad 13"). The game is
+## shown as a store build shows it (no developer tools), with a player who owns the gear in the pictures.
+func _store_shots(dir: String) -> void:
+	var only: Array = []
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--shots="):
+			only = Array(a.substr(8).split(","))
+	var keep_prog: Dictionary = Game.progress.duplicate(true)
+	var keep_stats: Dictionary = Game.stats.duplicate(true)
+	var keep_gear := {}
+	for gk in Game.GEAR_KEYS.values():
+		keep_gear[gk] = Game.get_s(gk)
+	var keep_scheme: String = Game.get_s("control_scheme")
+	var owned: Array = []
+	for kind in Game.GEAR_KEYS.keys():
+		for e in Catalog.kind_list(kind):
+			owned.append(kind + ":" + str(e["id"]))
+	Game.progress = {"xp": XP.total_for(27) + 140, "owned": owned, "packages": [], "pk_time": {}, "chest_at": 0,
+		"chest_from": 0, "chest_cut": false, "matches": 64, "curve": 2, "tutorial": true}
+	Game.stats = {"shots": 1840, "pots": 690, "games": 64, "wins_vs_ai": [9, 14, 6], "games_vs_ai": [10, 21, 13]}
+	Game.pretend_store = true
+	Game.settings_changed.emit("fps_counter")
+	Game.set_s("ar_mode", "studio")
+	Game.set_s("control_scheme", "slingshot")
+	Game.set_s("surface", "floor")
+	Game.progress_changed.emit()
+	# two real breaks give the mid-game tables
+	var lay_a := {}
+	var lay_b := {}
+	var need_layouts := only.is_empty()
+	for sid in only:
+		need_layouts = need_layouts or not (sid in ["02", "12", "13", "15", "16", "18", "19", "20"])
+	if need_layouts:
+		# the two broken racks: kept in a file (--lays=path) so every picture size gets the same tables
+		var lay_path := ""
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("--lays="):
+				lay_path = a.substr(7)
+		var saved: Variant = null
+		if lay_path != "" and FileAccess.file_exists(lay_path):
+			saved = JSON.parse_string(FileAccess.get_file_as_string(lay_path))
+		if saved is Dictionary:
+			lay_a = _store_lay_from(saved["a"])
+			lay_b = _store_lay_from(saved["b"])
+		else:
+			lay_a = await _store_break_layout(0.0)
+			lay_b = await _store_break_layout(0.012)
+			if lay_path != "":
+				var f := FileAccess.open(lay_path, FileAccess.WRITE)
+				f.store_string(JSON.stringify({"a": _store_lay_to(lay_a), "b": _store_lay_to(lay_b)}))
+				f.close()
+	var shots := ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"]
+	for id in shots:
+		if not only.is_empty() and not (id in only):
+			continue
+		await _store_one(dir, id, lay_a, lay_b)
+	_end_match()
+	stage.reset_manual()
+	Game.pretend_store = false
+	Game.progress = keep_prog
+	Game.stats = keep_stats
+	for gk in keep_gear.keys():
+		Game.set_s(gk, keep_gear[gk])
+	Game.set_s("control_scheme", keep_scheme)
+	Game.set_s("ar_mode", "auto")
+	Game.progress_changed.emit()
+	_stack.clear()
+	go("menu")
+	print("STORE done")
+
+
+func _store_gear(scene: String, table: String, cue: String, balls: String) -> void:
+	Game.set_s("scene", scene)
+	Game.set_s("table_style", table)
+	Game.set_s("cue_skin", cue)
+	Game.set_s("ball_set", balls)
+
+
+## Where a real break leaves the balls (number -> table point; the potted ones are left out).
+func _store_break_layout(yaw: float) -> Dictionary:
+	_end_match()
+	start_match({"mode": "practice"})
+	await _wait(0.6)
+	game.fire(yaw, 0.95, Vector2.ZERO, 0.0)
+	await _wait(0.4)
+	game.fast_forward()
+	var t0 := Time.get_ticks_msec()
+	while game.state != PoolGame.State.AIM and Time.get_ticks_msec() - t0 < 120000:
+		await _wait(0.2)
+	var lay := {}
+	for i in game.sim.n:
+		if game.sim.st[i] != PoolSim.ST_POCKETED:
+			lay[int(game.sim.num[i])] = game.sim.pos[i]
+	_end_match()
+	return lay
+
+
+func _store_lay_to(lay: Dictionary) -> Dictionary:
+	var out := {}
+	for k in lay:
+		out[str(k)] = [lay[k].x, lay[k].y]
+	return out
+
+
+func _store_lay_from(d: Dictionary) -> Dictionary:
+	var out := {}
+	for k in d:
+		out[int(k)] = Vector2(float(d[k][0]), float(d[k][1]))
+	return out
+
+
+func _store_place(layout: Dictionary) -> void:
+	var sim := game.sim
+	for i in sim.n:
+		var nb: int = sim.num[i]
+		sim.vel[i] = Vector2.ZERO
+		sim.spin[i] = Vector3.ZERO
+		sim.hz[i] = 0.0
+		sim.vz[i] = 0.0
+		sim.pocket_of[i] = -1
+		if layout.has(nb):
+			sim.st[i] = PoolSim.ST_REST
+			sim.pos[i] = layout[nb]
+			game.views[i].visible = true
+			game.views[i].scale = Vector3.ONE
+			game.views[i].place(sim.pos[i])
+		else:
+			sim.st[i] = PoolSim.ST_POCKETED
+			game.views[i].visible = false
+
+
+## Nothing in the way between a and b (other than the balls in skip)?
+func _store_clear(a: Vector2, b: Vector2, skip: Array) -> bool:
+	var sim := game.sim
+	for j in sim.n:
+		if j in skip or sim.st[j] == PoolSim.ST_POCKETED:
+			continue
+		var p: Vector2 = sim.pos[j]
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 1e-9), 0.0, 1.0)
+		if (a + ab * t).distance_to(p) < 2.05 * sim.R:
+			return false
+	return true
+
+
+## The easiest clear pot for a group (0 solids, 1 stripes, -1 any): [ball number, cue yaw] or [-1, yaw now].
+func _store_best(group: int) -> Array:
+	var sim := game.sim
+	var ci := game.cue_index()
+	var c := game.cue_ball_pos()
+	var best := [-1, game.control.yaw, INF]
+	for i in sim.n:
+		var nb: int = sim.num[i]
+		if sim.st[i] == PoolSim.ST_POCKETED or nb == 0 or nb == 8:
+			continue
+		if group >= 0 and (nb < 8) != (group == 0):
+			continue
+		var o: Vector2 = sim.pos[i]
+		for pk in sim.table.pockets:
+			var mouth: Vector2 = pk["mid"]
+			var d := (mouth - o).normalized()
+			var ghost := o - d * 2.0 * sim.R
+			var shot := ghost - c
+			var cut := absf(shot.angle_to(d))
+			if cut > deg_to_rad(42.0) or shot.length() < 0.3 or shot.length() > 1.5:
+				continue
+			if not _store_clear(c, ghost, [i, ci]) or not _store_clear(o, mouth, [i, ci]):
+				continue
+			var score := cut + 0.2 * shot.length()
+			if score < best[2]:
+				best = [nb, shot.angle(), score]
+	return best
+
+
+## Puts the white ball where a player would like it: a clear, gentle cut (about 0.6 m) on one of the group's balls,
+## preferring a ball near the middle of the table. Returns the cue yaw, or NAN when nothing fits.
+func _store_line_up(group: int) -> float:
+	var sim := game.sim
+	var ci := game.cue_index()
+	var g: TableGeom = sim.table
+	var best_score := INF
+	var best_pos := Vector2.ZERO
+	var best_yaw := NAN
+	for i in sim.n:
+		var nb: int = sim.num[i]
+		if sim.st[i] == PoolSim.ST_POCKETED or nb == 0 or nb == 8 or (group >= 0 and (nb < 8) != (group == 0)):
+			continue
+		var o: Vector2 = sim.pos[i]
+		for pk in g.pockets:
+			var mouth: Vector2 = pk["mid"]
+			if o.distance_to(mouth) > 1.1 or not _store_clear(o, mouth, [i, ci]):
+				continue
+			var d := (mouth - o).normalized()
+			var ghost := o - d * 2.0 * sim.R
+			for cut_deg in [12.0, -12.0, 20.0, -20.0, 5.0, -5.0, 28.0, -28.0]:
+				var back := (-d).rotated(deg_to_rad(cut_deg))
+				var c := ghost + back * 0.62
+				if absf(c.x) > g.a - 0.12 or absf(c.y) > g.b - 0.12:
+					continue
+				var free := true
+				for j in sim.n:
+					if j != ci and sim.st[j] != PoolSim.ST_POCKETED and sim.pos[j].distance_to(c) < 3.0 * sim.R:
+						free = false
+				if not free or not _store_clear(c, ghost, [i, ci]):
+					continue
+				var score := o.length() + absf(cut_deg) * 0.01
+				if score < best_score:
+					best_score = score
+					best_pos = c
+					best_yaw = (ghost - c).angle()
+	if not is_nan(best_yaw):
+		sim.pos[ci] = best_pos
+		sim.st[ci] = PoolSim.ST_REST
+		game.views[ci].visible = true
+		game.views[ci].place(best_pos)
+	return best_yaw
+
+
+## A match against the CPU in the middle of the game: the balls where a real break left them, the player on solids,
+## the cue on the easiest pot.
+func _store_versus(layout: Dictionary, group := 0) -> void:
+	_end_match()
+	start_match({"mode": "versus", "vs_ai": true, "ai_level": 1})
+	await _wait(0.8)
+	_store_place(layout)
+	game.call("_set_break", false)
+	game.rules.is_break = false
+	game.rules.ball_in_hand = false
+	game.rules.groups = [group, 1 - group]
+	game.groups_set.emit()
+	var yaw := _store_line_up(group)
+	game.call("_start_turn")
+	await _wait(0.3)
+	if is_nan(yaw):
+		yaw = float(_store_best(group)[1])
+	game.control.reset_for_turn(yaw)
+
+
+## The game's own camera, put where a photographer would stand: target in table space (metres, y up from the cloth).
+func _store_cam(target: Vector3, dist: float, pitch_deg: float, yaw: float) -> void:
+	stage.set("_idle_spin", false)
+	stage.set("_manual", true)
+	stage.set("_want_target", stage.table_root.to_global(target))
+	stage.set("_want_dist", dist)
+	stage.set("_want_pitch", deg_to_rad(pitch_deg))
+	stage.set("_want_yaw", yaw)
+	stage.call("_snap_orbit")
+
+
+## One table, lit and staged for a showcase picture (no buttons): a mid-game table, the cue lined up on a pot.
+func _store_showcase(dir: String, id: String, gear: Array, layout: Dictionary, cam: Array) -> void:
+	_store_gear(gear[0], gear[1], gear[2], gear[3])
+	await _store_versus(layout)
+	hud.visible = false
+	if "--sweep" in OS.get_cmdline_user_args():
+		# composing: the same table from eight sides
+		for k in 8:
+			_store_cam(cam[0], cam[1], cam[2], -PI + k * PI / 4.0)
+			await _wait(1.0)
+			await _shot(dir, "sweep_%s_%d" % [id, k])
+		hud.visible = true
+		stage.reset_manual()
+		return
+	_store_cam(cam[0], cam[1], cam[2], cam[3])
+	await _wait(2.5)
+	stage.call("_snap_orbit")
+	await _wait(0.3)
+	await _shot(dir, "store_" + id)
+	hud.visible = true
+	stage.reset_manual()
+
+
+func _store_one(dir: String, id: String, lay_a: Dictionary, lay_b: Dictionary) -> void:
+	match id:
+		"01":
+			# the hero: aiming on a mid-game table, buttons and all
+			# (--scene01=, --lay01=b, --cam01=pitch,dist try other looks)
+			var scene01 := "skyline"
+			var lay01 := lay_b
+			var cam01 := [27.0, 1.3]
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--scene01="):
+					scene01 = a.substr(10)
+				elif a == "--lay01=a":
+					lay01 = lay_a
+				elif a.begins_with("--cam01="):
+					var parts := a.substr(8).split(",")
+					cam01 = [float(parts[0]), float(parts[1])]
+			_store_gear(scene01, "emerald", "cue_galaxy", "balls")
+			await _store_versus(lay01)
+			game.guide_override = 3      # the full prediction: where both balls go (Settings → Aim guide)
+			game.call("_apply_assist")
+			stage.set_view(Stage.View.AIM)
+			await _wait(3.0)
+			stage.call("_snap_orbit")
+			# the aiming view, lifted a little so more of the table shows
+			stage.set("_idle_spin", false)
+			stage.set("_manual", true)
+			stage.set("_want_pitch", deg_to_rad(float(cam01[0])))
+			stage.set("_want_dist", float(cam01[1]))
+			stage.call("_snap_orbit")
+			await _wait(0.5)
+			await _shot(dir, "store_01")
+			stage.reset_manual()
+		"02":
+			# the break, frozen as the rack explodes
+			_store_gear("skyline", "emerald", "cue_emerald_classic", "balls")
+			_end_match()
+			start_match({"mode": "practice"})
+			await _wait(1.0)
+			hud.visible = false
+			var foot := Rack.foot_spot(game.sim)
+			_store_cam(Vector3(foot.x + 0.05, 0.02, foot.y), 0.95, 13.0, 0.25)
+			await _wait(1.5)
+			var start_pos := {}
+			for i in game.sim.n:
+				start_pos[i] = game.sim.pos[i]
+			# frozen once enough balls have left their places (--freeze02=balls,metres)
+			var fz := [10, 0.1]
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--freeze02="):
+					var parts := a.substr(11).split(",")
+					fz = [int(parts[0]), float(parts[1])]
+			game.fire(0.0, 0.95, Vector2.ZERO, 0.0)
+			var t0 := Time.get_ticks_msec()
+			while Time.get_ticks_msec() - t0 < 60000:
+				await get_tree().physics_frame
+				var moved := 0
+				for i in game.sim.n:
+					if game.sim.num[i] != 0 and game.sim.pos[i].distance_to(start_pos[i]) > float(fz[1]):
+						moved += 1
+				if moved >= int(fz[0]):
+					break
+			game.process_mode = Node.PROCESS_MODE_DISABLED
+			await _wait(0.5)
+			await _shot(dir, "store_02")
+			game.process_mode = Node.PROCESS_MODE_INHERIT
+			hud.visible = true
+			stage.reset_manual()
+		"03":
+			await _store_showcase(dir, id, ["orbit", "galaxy", "cue_galaxy", "planets"], lay_b, [Vector3(0, -0.1, 0), 2.5, 18.0, 0.785])
+		"04":
+			await _store_showcase(dir, id, ["forge", "dragon", "cue_dragon_b", "molten"], lay_a, [Vector3(0, -0.1, 0), 2.5, 18.0, 1.571])
+		"05":
+			await _store_showcase(dir, id, ["aurora", "ice", "cue_dragon_c", "snowglobe"], lay_b, [Vector3(0, -0.1, 0), 2.5, 18.0, 2.356])
+		"06":
+			await _store_showcase(dir, id, ["reef", "sea", "cue_trident", "abyss"], lay_a, [Vector3(0, -0.1, 0), 2.5, 18.0, 0.785])
+		"07":
+			await _store_showcase(dir, id, ["temple", "sakura", "cue_seraph", "opal"], lay_b, [Vector3(0, -0.1, 0), 2.5, 18.0, 2.356])
+		"08":
+			await _store_showcase(dir, id, ["desert", "gold", "cue_pharaoh_c", "gold_enamel"], lay_a, [Vector3(0, -0.1, 0), 2.7, 12.0, -0.785])
+		"09":
+			await _store_showcase(dir, id, ["cavern", "holo", "cue_crystal_c", "gemstone"], lay_b, [Vector3(0, -0.1, 0), 2.5, 18.0, -2.356])
+		"10":
+			await _store_showcase(dir, id, ["grove", "walnut", "cue_rosewood", "vintage"], lay_a, [Vector3(0, -0.1, 0), 2.5, 18.0, 0.785])
+		"11":
+			# a legendary cue, close: the stick lined up on the white ball
+			var cue_list := ["cue_dragon_c"]
+			var scene11 := "sunset"
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--scene11="):
+					scene11 = a.substr(10)
+				if a.begins_with("--cues="):
+					cue_list = Array(a.substr(7).split(","))
+			for cue_id in cue_list:
+				_store_gear(scene11, "emerald", cue_id, "balls")
+				await _store_versus(lay_a)
+				hud.visible = false
+				await _wait(0.5)
+				var cx: Transform3D = game.cue_view.global_transform
+				var d := -cx.basis.z.normalized()
+				var perp := Vector3(-d.z, 0.0, d.x)
+				# behind the stick and a little to the side: the butt big in front (--cam11=side,back,dist,pitch,along)
+				var c := [0.5, 0.85, 0.5, 16.0, 0.75]
+				for a in OS.get_cmdline_user_args():
+					if a.begins_with("--cam11="):
+						var parts := a.substr(8).split(",")
+						for k in mini(parts.size(), c.size()):
+							c[k] = float(parts[k])
+				var off := (perp * float(c[0]) - d * float(c[1])).normalized()
+				stage.set("_idle_spin", false)
+				stage.set("_manual", true)
+				stage.set("_want_target", cx * Vector3(0.0, 0.0, float(c[4])))
+				stage.set("_want_dist", float(c[2]))
+				stage.set("_want_pitch", deg_to_rad(float(c[3])))
+				stage.set("_want_yaw", atan2(off.x, off.z))
+				stage.call("_snap_orbit")
+				await _wait(2.0)
+				await _shot(dir, "store_11" + ("" if cue_list.size() == 1 else "_" + cue_id))
+				hud.visible = true
+				stage.reset_manual()
+		"12", "13":
+			# a ball set, close (--sweep tries many sets for 12; --balls12=a,b picks)
+			var sets := ["lavalamp" if id == "12" else "galaxy"]
+			if "--sweep" in OS.get_cmdline_user_args() and id == "12":
+				sets = ["lavalamp", "fireworks", "galaxy", "planets", "molten", "snowglobe", "chrome", "opal", "gemstone", "hologram", "disco", "cathedral", "scales", "kintsugi"]
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--balls" + id + "="):
+					sets = Array(a.substr(10).split(","))
+			for bs in sets:
+				await _store_balls(dir, id, str(bs), sets.size() > 1)
+		"14":
+			# spin and a raised cue: backspin with side, the full line drawn
+			_store_gear("forge", "crimson", "cue_lava", "balls")
+			await _store_versus(lay_b, 1)      # stripes: a different shot from the hero's
+			game.guide_override = 3      # the full prediction: where both balls go
+			game.call("_apply_assist")
+			game.control.offset = Vector2(0.0, -0.32)
+			(hud.get("_spin") as Widgets.SpinPad).set_spin(game.control.offset)
+			stage.set_view(Stage.View.AIM)
+			await _wait(3.0)
+			stage.call("_snap_orbit")
+			await _wait(0.5)
+			await _shot(dir, "store_14")
+		"15":
+			# Place your world: in front of you with the camera, or in its own world (as on a phone with AR)
+			_end_match()
+			_store_gear("aurora", "ice", "cue_dragon_c", "snowglobe")
+			_stack.clear()
+			go("menu")
+			await _wait(0.8)
+			Game.world_ready = ""
+			var sim_was: bool = stage.arcore.simulate
+			stage.arcore.simulate = true
+			go("place_world")
+			await _wait(2.0)
+			await _shot(dir, "store_15")
+			stage.arcore.simulate = sim_was
+			Game.world_ready = "studio"
+			_stack.clear()
+			go("menu")
+		"16":
+			# a legendary package opening
+			_end_match()
+			_store_gear("forge", "dragon", "cue_dragon_b", "molten")
+			Game.progress["owned"] = (Game.progress["owned"] as Array).filter(func(o): return o != "cue:cue_phoenix")
+			Game.progress["packages"] = [105]
+			Game.progress_changed.emit()
+			_stack.clear()
+			go("menu")
+			await _wait(1.0)
+			go("packages")
+			await _wait(1.4)
+			_screen.call("_open", false, false)
+			await _wait(2.2)
+			await _shot(dir, "store_16")
+			for n in _screen.find_children("*", "", true, false):
+				if n is RewardScreens.Reveal:
+					n.closed.emit(false)
+					n.queue_free()
+			Game.progress["packages"] = []
+			if not ("cue:cue_phoenix" in Game.progress["owned"]):
+				(Game.progress["owned"] as Array).append("cue:cue_phoenix")
+			_stack.clear()
+			go("menu")
+			await _wait(0.5)
+		"17":
+			# a win against the CPU that takes the player up a level
+			_store_gear("synth", "neon", "cue_neon", "balls")
+			await _store_versus(lay_a)
+			var tk := XP.Tracker.new()
+			for i in 3:
+				tk.shot(1)
+				tk.shot(1)
+				tk.turn_over()
+			tk.shot(2)
+			tk.shot(0, true)
+			tk.won = true
+			var xs: Dictionary = tk.summary("cpu")
+			var x_from := XP.total_for(28) - 40
+			_results = Overlays.Results.new(self, {"mode": "versus", "winner": 0, "winner_name": Game.player_name(0), "reason": "Sank the 8!", "shots": 19,
+				"vs_ai": true, "ai_level": 1, "xp": xs, "gain": {"from": 27, "to": 28, "xp_from": x_from, "xp_to": x_from + 40 + 60}})
+			overlay_host.add_child(_results)
+			await _wait(5.0)
+			await _shot(dir, "store_17")
+			_results.queue_free()
+			_results = null
+			_end_match()
+		"18":
+			_end_match()
+			_store_gear("cavern", "holo", "cue_crystal_c", "gemstone")
+			_stack.clear()
+			go("menu")
+			await _wait(0.8)
+			go("gear")
+			await _wait(1.2)
+			await _shot(dir, "store_18")
+			_stack.clear()
+			go("menu")
+		"19":
+			_end_match()
+			_store_gear("synth", "neon", "cue_neon", "balls")
+			_stack.clear()
+			go("menu")
+			await _wait(3.0)
+			await _shot(dir, "store_19")
+		"20":
+			# the tutorial: an objective on the table, the ball it's about ringed in gold
+			_end_match()
+			_store_gear("lounge", "emerald", "cue_emerald_classic", "balls")
+			start_match({"mode": "practice", "tutorial": 0})
+			await _wait(1.5)
+			var tut: Tutorial = hud.get_node_or_null("Tutorial")
+			tut.step = 2
+			tut.phase = 0
+			tut.call("_begin_step")
+			await _wait(2.5)
+			await _shot(dir, "store_20")
+			_end_match()
+
+
+## A ball set, close: eight balls in two rows near a corner pocket, each turned its own way.
+func _store_balls(dir: String, id: String, bs: String, named: bool) -> void:
+	_store_gear("synth" if id == "12" else "orbit", "emerald" if id == "12" else "midnight", "cue_neon", bs)
+	_end_match()
+	start_match({"mode": "practice"})
+	await _wait(1.0)
+	hud.visible = false
+	game.cue_view.visible = false
+	game.process_mode = Node.PROCESS_MODE_DISABLED
+	var show := [0, 1, 3, 8, 9, 11, 14, 6] if id == "12" else [0, 2, 4, 8, 10, 12, 15, 5]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11 if id == "12" else 23
+	var R: float = game.sim.R
+	for i in game.sim.n:
+		var num: int = game.sim.num[i]
+		var slot := show.find(num)
+		var v: BallView = game.views[i]
+		if slot < 0:
+			v.visible = false
+			continue
+		var row := slot / 4
+		var colm := slot % 4
+		v.position = Vector3(0.62 + colm * 0.068 + row * 0.034, R, -0.05 + row * 0.07)
+		v.basis = Basis.from_euler(Vector3(rng.randf_range(-0.6, 0.6), rng.randf_range(-0.9, 0.9) + 0.5, rng.randf_range(-0.4, 0.4)))
+	var mid := Vector3.ZERO
+	var count := 0
+	for i in game.sim.n:
+		if game.views[i].visible:
+			mid += game.views[i].global_position
+			count += 1
+	mid /= maxf(count, 1)
+	stage.set("_idle_spin", false)
+	stage.set("_manual", true)
+	stage.set("_want_target", mid + Vector3(0.0, -0.01, 0.0))
+	stage.set("_want_dist", 0.27)
+	stage.set("_want_pitch", deg_to_rad(17.0))
+	stage.set("_want_yaw", 0.25)
+	stage.call("_snap_orbit")
+	await _wait(2.4)
+	await _shot(dir, "store_" + id + ("_" + bs if named else ""))
+	game.process_mode = Node.PROCESS_MODE_INHERIT
+	hud.visible = true
+	stage.reset_manual()
+
+
 ## The tour's scripted player, for the tutorial recordings: the cue turns to the line, (for spin) the dot moves on
 ## the pad, the cue is drawn back, then the shot. Not slow: straight to the shot.
 func _human_shot(yaw: float, power: float, offset: Vector2, slow: bool) -> void:
@@ -1100,11 +1658,11 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
-		if only == "" and s in ["perf", "ios_check"]:
+		if only == "" and s in ["perf", "ios_check", "store", "breakview"]:
 			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator)
 		Game.world_ready = "studio" if s != "world" else ""   # (v1.1.15: the world is chosen; the "world" step tests choosing it)
 		await _tour_step(dir, s)
@@ -3190,6 +3748,44 @@ func _tour_step(dir: String, s: String) -> void:
 			print("PACKAGES %s" % ("PASS" if pk_ok else "FAIL (a model has no lid)"))
 		"perf":
 			await _perf_tour(dir)
+		"store":
+			await _store_shots(dir)
+		"breakview":
+			# a head-on break seen from above, for judging how the rack spreads (record with --write-movie):
+			# --bpow=0.85 power, --byaw=0 degrees off the line through the foot spot
+			var bpow := 0.85
+			var byaw := 0.0
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--bpow="):
+					bpow = float(a.substr(7))
+				elif a.begins_with("--byaw="):
+					byaw = float(a.substr(7))
+			Game.set_s("ar_mode", "studio")
+			Game.set_s("scene", "lounge")
+			Game.set_s("table_style", "emerald")
+			Game.set_s("ball_set", "balls")
+			start_match({"mode": "practice"})
+			await _wait(1.5)
+			hud.visible = false
+			stage.set_view(Stage.View.TOP)
+			await _wait(1.5)
+			var f0 := Engine.get_process_frames()
+			var st0: float = game.sim.time
+			game.fire(deg_to_rad(byaw), bpow, Vector2.ZERO, 0.0)
+			var tb := Time.get_ticks_msec()
+			while (game.sim.is_moving() or game.state != PoolGame.State.AIM) and Time.get_ticks_msec() - tb < 40000:
+				await _wait(0.1)
+			await _wait(0.8)
+			var near := 0
+			var on := 0
+			for i in game.sim.n:
+				if game.sim.num[i] != 0 and game.sim.st[i] != PoolSim.ST_POCKETED:
+					on += 1
+					if game.sim.pos[i].distance_to(Rack.foot_spot(game.sim) + Vector2(0.1, 0.0)) < 0.25:
+						near += 1
+			print("BREAKVIEW power %.2f: %d of %d object balls still near the rack (%d frames, %.2f s of play)" % [bpow, near, on, Engine.get_process_frames() - f0, game.sim.time - st0])
+			await _shot(dir, "breakview")
+			hud.visible = true
 		"loading":
 			# the screen shown while the table is being built at startup
 			var ls := _make_loading()

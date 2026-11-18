@@ -2,7 +2,11 @@ class_name Rack
 extends RefCounted
 ## Standard racks. Foot spot sits at +a/2, head spot at -a/2 (cue ball side).
 
-const GAP := 0.0004  # tiny gap so the break resolves as a crisp cascade
+## Balls frozen (touching), like a tight rack on a real table. Each contact is then resolved at the same instant
+## and the hit spreads through the whole rack, so a good break sends balls all over the table. Even a 0.1 mm gap
+## turns it into a chain of separate hits that leaves half the rack near the foot spot (tests/break_spread.gd:
+## at 13 m/s, 7 of 15 balls stayed near the rack with 0.4 mm gaps, 1-2 when frozen).
+const GAP := 0.0
 
 
 static func foot_spot(s: PoolSim) -> Vector2:

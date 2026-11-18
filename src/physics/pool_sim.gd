@@ -20,7 +20,7 @@ const OFF_TABLE := -2      # pocket_of value for a ball that jumped off the tabl
 enum { K_CUE, K_OBJECT, K_EIGHT }
 
 const G := 9.81
-const MAX_EVENTS_PER_STEP := 64
+const MAX_EVENTS_PER_STEP := 160  # a frozen rack takes up to ~60 contacts in the break's first 1/240 s
 const HOP_MIN := 0.06       # m/s: slower upward bounces don't leave the cloth
 
 # ---- tunables (debug menu writes these) ----
