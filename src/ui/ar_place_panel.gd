@@ -10,6 +10,13 @@ var stage: Stage
 var lbl: Label
 var detail: Label
 var sizes: HBoxContainer
+var adjust: HBoxContainer       ## turn and size the table before placing it
+var turn_l: Button
+var turn_r: Button
+var size_slider: HSlider
+var size_val: Label
+var _desk: Button
+var _floor: Button
 var place: Button
 var retry: Button
 var install: Button
@@ -43,6 +50,8 @@ func _init(p_stage: Stage) -> void:
 	sizes.alignment = BoxContainer.ALIGNMENT_CENTER
 	var desk := UIKit.button("Mini", "ChipButton")
 	var floor_b := UIKit.button("Life-size", "ChipButton")
+	_desk = desk
+	_floor = floor_b
 	desk.toggle_mode = true
 	floor_b.toggle_mode = true
 	var grp := ButtonGroup.new()
@@ -56,6 +65,38 @@ func _init(p_stage: Stage) -> void:
 	sizes.add_child(desk)
 	sizes.add_child(floor_b)
 	v.add_child(sizes)
+	# v1.1.15 (Randy, 18 Nov: "the player should be able to rotate and scale the table size before placing it"):
+	# the arrows turn it 15° a tap, the slider sizes it (Settings → World size); two fingers on the screen do the
+	# same (twist to turn, pinch to size)
+	adjust = UIKit.hbox(12)
+	adjust.alignment = BoxContainer.ALIGNMENT_CENTER
+	turn_l = UIKit.icon_button("undo", 76, "Turn left")
+	turn_l.name = "TurnLeft"
+	turn_l.pressed.connect(func(): stage.turn_preview(deg_to_rad(15.0)))
+	turn_r = UIKit.icon_button("refresh", 76, "Turn right")
+	turn_r.name = "TurnRight"
+	turn_r.pressed.connect(func(): stage.turn_preview(-deg_to_rad(15.0)))
+	adjust.add_child(turn_l)
+	adjust.add_child(turn_r)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(18, 0)
+	adjust.add_child(gap)
+	adjust.add_child(IconGlyph.make("size", 40, UIKit.MUTED))
+	size_slider = Widgets.TouchSlider.new()
+	size_slider.name = "PlaceSize"
+	size_slider.min_value = Game.WORLD_MIN
+	size_slider.max_value = Game.WORLD_MAX
+	size_slider.step = 0.01
+	size_slider.value = Game.world_size()
+	size_slider.custom_minimum_size = Vector2(330, 56)
+	size_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	size_slider.value_changed.connect(func(x: float): stage.resize_preview(x))
+	adjust.add_child(size_slider)
+	size_val = UIKit.label(_size_text(Game.world_size()), "AccentLabel")
+	size_val.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	size_val.custom_minimum_size.x = 150
+	adjust.add_child(size_val)
+	v.add_child(adjust)
 	var row2 := UIKit.hbox(14)
 	row2.alignment = BoxContainer.ALIGNMENT_CENTER
 	place = UIKit.button("Place table", "PrimaryButton", "check", 360)
@@ -79,6 +120,10 @@ func _init(p_stage: Stage) -> void:
 	v.add_child(row2)
 
 
+static func _size_text(x: float) -> String:
+	return L.t("Life-size") if x >= 0.995 else "%d%%" % roundi(x * 100.0)
+
+
 ## Bottom centre of `area`.
 func place_in(area: Vector2) -> void:
 	reset_size()
@@ -92,6 +137,18 @@ func refresh() -> void:
 	place.visible = not blocked
 	place.disabled = not stage.can_place()
 	sizes.visible = not blocked
+	adjust.visible = not blocked
+	# the size may have changed elsewhere (a pinch, the Mini / Life-size chips): show it
+	var ws := Game.world_size()
+	if absf(size_slider.value - ws) > 0.004:
+		size_slider.set_value_no_signal(ws)
+	var vt := _size_text(ws)
+	if size_val.text != vt:
+		size_val.text = vt
+	var on_floor: bool = Game.get_s("surface") == "floor"
+	if _floor.button_pressed != on_floor:
+		_floor.set_pressed_no_signal(on_floor)
+		_desk.set_pressed_no_signal(not on_floor)
 	detail.visible = blocked
 	install.visible = blocked and stage.ar_can_install()
 	hint.visible = install.visible

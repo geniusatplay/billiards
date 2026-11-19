@@ -1,6 +1,10 @@
 class_name PackageView
-extends SubViewportContainer
+extends Control
 ## A reward package shown in 3D inside the UI: it sways while it waits and opens when asked.
+## v1.1.15 (Randy, 18 Nov: "the XP chests aren't visible", on his phone in AR): the 3D picture is now drawn without
+## MSAA (2× supersampled instead: the viewport is drawn at twice the size and shown scaled down), and every view checks
+## its first picture; when the 3D picture comes out empty on a phone, that view and every later one show the baked
+## picture of the same model (assets/icons/packages/, tour step `pkbake`) with the same sway and opening.
 ## The five models (assets/models/packages/pk_1..5.glb) are the designs Randy chose. Since v1.1.8: Pine Crate
 ## (common), Flight Case (uncommon), Emerald Monolith (rare), Pink Neon Flight Case (epic), Ruby Vault (legendary);
 ## the XP chest is the orange XP Flight Case (since v1.1.7). (Up to v1.1.6: Pine Crate, Emerald Crate, Flight Case,
@@ -36,6 +40,10 @@ const PAINT := {
 }
 const XP_CHEST := "res://assets/models/packages/xp_chest.glb"
 const XP_GOLD := Color("ffc850")     # (the XP chest's colour in the menu and its light, kept since it was gold)
+const SS := 2                        # supersampling: the 3D picture is drawn at twice the size
+## -1 not known yet, 0 the 3D picture works here, 1 it came out empty: baked pictures from now on (this launch)
+static var flat_mode := -1
+static var flat_reason := ""
 
 var rarity := 1
 var idle := true
@@ -43,6 +51,10 @@ var model_path := ""         # "" = the package of `rarity`
 var glow := Color.WHITE      # the colour of the light that pours out
 var burst_at := Vector3(0, 0.26, 0)
 var _vp: SubViewport
+var _pic: TextureRect         # the 3D picture, shown scaled down
+var _flat: TextureRect        # the baked picture, when the 3D one can't be drawn
+var _flat_glow: TextureRect
+var _px := 360.0
 static var _burst_shader: Shader
 var _spin: Node3D
 var _lid: Node3D
@@ -58,9 +70,9 @@ func _init(p_rarity := 1, px := 360.0) -> void:
 	glow = GearScreens.rarity_color(rarity)
 	if rarity == 5:
 		burst_at = Vector3(0, 0.29, 0.1)
+	_px = px
 	custom_minimum_size = Vector2(px, px)
 	size = Vector2(px, px)
-	stretch = true
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
@@ -76,7 +88,7 @@ static func xp_chest(px := 360.0) -> PackageView:
 ## Off: the picture is drawn once and then kept (a waiting chest in the menu costs nothing per frame).
 func set_live(on: bool) -> void:
 	idle = on
-	if _vp == null:
+	if _vp == null or _flat != null:
 		return
 	if on:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -87,12 +99,24 @@ func set_live(on: bool) -> void:
 
 
 func _ready() -> void:
+	if flat_mode == 1:
+		_show_flat()
+		return
 	_vp = SubViewport.new()
 	_vp.own_world_3d = true
 	_vp.transparent_bg = true
-	_vp.msaa_3d = Viewport.MSAA_2X
+	_vp.msaa_3d = Viewport.MSAA_DISABLED
+	_vp.size = Vector2i(roundi(_px * SS), roundi(_px * SS))
 	_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(_vp)
+	_pic = TextureRect.new()
+	_pic.texture = _vp.get_texture()
+	_pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_pic.stretch_mode = TextureRect.STRETCH_SCALE
+	_pic.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_pic.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(_pic)
 	var env := Environment.new()
 	env.background_mode = Environment.BG_CLEAR_COLOR
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -120,12 +144,20 @@ func _ready() -> void:
 	_spin = Node3D.new()
 	_vp.add_child(_spin)
 	_build()
-	if not idle:
-		# still: let it draw a few frames (the model and its shaders arrive), then keep that picture
-		for i in 3:
-			await RenderingServer.frame_post_draw
-		if not idle and not _open and is_inside_tree():
-			_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	if DisplayServer.get_name() == "headless":
+		return          # (nothing is drawn without a screen)
+	# let it draw a few frames (the model and its shaders arrive), then check the picture once
+	for i in 4:
+		await RenderingServer.frame_post_draw
+	if not is_inside_tree() or _vp == null:
+		return
+	if flat_mode == -1 or OS.get_cmdline_user_args().has("--x-flatpk"):
+		_check_drawn()
+	elif flat_mode == 1:
+		_go_flat()
+		return
+	if not idle and not _open and _vp != null:
+		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE     # still: keep that picture
 
 
 func _build() -> void:
@@ -192,9 +224,14 @@ func _build() -> void:
 
 
 func _process(delta: float) -> void:
+	_t += delta
+	if _flat != null:
+		if idle and not _open and not Game.get_s("reduced_motion"):
+			_flat.rotation = sin(_t * 0.7) * 0.05
+			_flat.position.y = sin(_t * 1.4) * size.y * 0.012
+		return
 	if _spin == null:
 		return
-	_t += delta
 	if idle and not _open and not Game.get_s("reduced_motion"):
 		_spin.rotation.y = sin(_t * 0.7) * 0.22
 		_spin.position.y = sin(_t * 1.4) * 0.012
@@ -202,6 +239,9 @@ func _process(delta: float) -> void:
 
 ## Shakes, pops the lid and lets the light out. Emits `opened` when the light is at its brightest.
 func open(fast := false) -> void:
+	if _flat != null and not _open:
+		_open_flat(fast)
+		return
 	if _open or _lid == null:
 		opened.emit()
 		return
@@ -228,3 +268,113 @@ func open(fast := false) -> void:
 	tw.set_parallel(false)
 	tw.tween_callback(func(): opened.emit())
 	tw.tween_property(_burst, "scale", Vector3.ONE * 0.9, 0.5 * k)
+
+
+## The baked picture of this model (tour step `pkbake`), or null.
+func _flat_texture() -> Texture2D:
+	var nm := "xp_chest" if model_path == XP_CHEST else "pk_%d" % rarity
+	var path := "res://assets/icons/packages/%s.png" % nm
+	return load(path) as Texture2D if ResourceLoader.exists(path) else null
+
+
+## Looks at the first 3D picture: almost nothing drawn means this phone can't draw it (the model is a big shape in
+## the middle of the picture, so a real picture has thousands of drawn pixels).
+func _check_drawn() -> void:
+	var img := _vp.get_texture().get_image()
+	var drawn := 0
+	var seen := 0
+	if img != null and not img.is_empty():
+		var w := img.get_width()
+		var h := img.get_height()
+		var step := maxi(2, w / 64)
+		for y in range(0, h, step):
+			for x in range(0, w, step):
+				seen += 1
+				if img.get_pixel(x, y).a > 0.5:
+					drawn += 1
+	var forced := OS.get_cmdline_user_args().has("--x-flatpk")
+	if drawn >= 12 and not forced:
+		flat_mode = 0
+		print("[pkview] 3D picture drawn (%d of %d samples)" % [drawn, seen])
+		return
+	flat_mode = 1
+	flat_reason = "forced (--x-flatpk)" if forced else ("empty picture (%d of %d samples drawn, %s)" % [drawn, seen,
+		RenderingServer.get_video_adapter_name()])
+	print("[pkview] 3D picture %s: baked pictures from now on" % flat_reason)
+	_go_flat()
+
+
+func _go_flat() -> void:
+	if _vp != null:
+		_vp.queue_free()
+		_vp = null
+	if _pic != null:
+		_pic.queue_free()
+		_pic = null
+	_spin = null
+	_lid = null
+	_show_flat()
+
+
+func _show_flat() -> void:
+	if _flat != null:
+		return
+	# the glow that pours out when it opens (behind the picture)
+	_flat_glow = TextureRect.new()
+	var g := GradientTexture2D.new()
+	g.fill = GradientTexture2D.FILL_RADIAL
+	g.fill_from = Vector2(0.5, 0.5)
+	g.fill_to = Vector2(1.0, 0.5)
+	g.width = 128
+	g.height = 128
+	var gr := Gradient.new()
+	gr.set_color(0, Color(glow.lerp(Color.WHITE, 0.35), 0.95))
+	gr.set_color(1, Color(glow, 0.0))
+	g.gradient = gr
+	_flat_glow.texture = g
+	_flat_glow.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_flat_glow.stretch_mode = TextureRect.STRETCH_SCALE
+	_flat_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var add := CanvasItemMaterial.new()
+	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_flat_glow.material = add
+	_flat_glow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_flat_glow.scale = Vector2.ONE * 0.05
+	_flat_glow.visible = false
+	add_child(_flat_glow)
+	_flat = TextureRect.new()
+	_flat.texture = _flat_texture()
+	_flat.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_flat.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_flat.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	_flat.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_flat.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(_flat)
+	var pivots := func():
+		_flat.pivot_offset = size * Vector2(0.5, 0.62)
+		_flat_glow.pivot_offset = size * 0.5
+	pivots.call()
+	resized.connect(pivots)
+
+
+## The baked picture's opening: the same shake, then the light bursts out and the picture fades into it.
+func _open_flat(fast: bool) -> void:
+	_open = true
+	var k := 0.45 if fast else 1.0
+	var tw := create_tween()
+	tw.tween_property(_flat, "rotation", 0.0, 0.12 * k)
+	for i in 6:
+		tw.tween_property(_flat, "rotation", (0.06 if i % 2 == 0 else -0.06) * (1.0 + i * 0.25), 0.07 * k)
+	tw.tween_property(_flat, "rotation", 0.0, 0.05 * k)
+	tw.tween_callback(func():
+		Sfx.play("rack", 0.8)
+		Game.vibrate(40)
+		_flat_glow.visible = true)
+	tw.set_parallel(true)
+	tw.tween_property(_flat_glow, "scale", Vector2.ONE * 1.5, 0.5 * k).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_flat, "scale", Vector2.ONE * 1.12, 0.3 * k).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.set_parallel(false)
+	tw.tween_callback(func(): opened.emit())
+	tw.set_parallel(true)
+	tw.tween_property(_flat_glow, "scale", Vector2.ONE * 1.0, 0.5 * k)
+	tw.tween_property(_flat, "modulate:a", 0.35, 0.5 * k)

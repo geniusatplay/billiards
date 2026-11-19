@@ -5,6 +5,10 @@ extends RefCounted
 const INK := Color("0b1220")
 const GLASS := Color(0.071, 0.110, 0.180, 0.90)
 const GLASS_HI := Color(0.098, 0.149, 0.247, 0.94)
+## Buttons are black with green (Randy, 18 Nov 2026: the old blue ones were low-contrast; "any other similar blue
+## buttons should be stylized to green and black").
+const BTN_BLACK := Color(0.016, 0.035, 0.03, 0.94)
+const BTN_BLACK_HI := Color(0.03, 0.12, 0.085, 0.96)
 const EMERALD := Color("2be7a5")
 const EMERALD_DK := Color("12a878")
 const GOLD := Color("ffc857")
@@ -129,10 +133,10 @@ static func theme() -> Theme:
 	t.set_color("font_color", "Label", TEXT)
 	t.set_color("font_shadow_color", "Label", Color(0, 0, 0, 0.0))
 	# Buttons
-	var bn := box(GLASS_HI, 24, 2, LINE, Vector4(30, 16, 30, 16))
-	var bh := box(Color(0.13, 0.2, 0.32, 0.96), 24, 2, Color(EMERALD, 0.55), Vector4(30, 16, 30, 16))
-	var bp := box(EMERALD_DK, 24, 2, EMERALD, Vector4(30, 16, 30, 16))
-	var bd := box(Color(0.1, 0.13, 0.2, 0.5), 24, 2, LINE, Vector4(30, 16, 30, 16))
+	var bn := box(BTN_BLACK, 24, 2, Color(EMERALD, 0.55), Vector4(30, 16, 30, 16))
+	var bh := box(BTN_BLACK_HI, 24, 2, EMERALD, Vector4(30, 16, 30, 16))
+	var bp := box(EMERALD, 24, 2, EMERALD, Vector4(30, 16, 30, 16))
+	var bd := box(Color(0.02, 0.04, 0.04, 0.6), 24, 2, Color(EMERALD, 0.18), Vector4(30, 16, 30, 16))
 	var bf := box(Color(0, 0, 0, 0), 24, 3, EMERALD, Vector4(30, 16, 30, 16))
 	for st in [["normal", bn], ["hover", bh], ["pressed", bp], ["disabled", bd], ["focus", bf], ["hover_pressed", bp]]:
 		t.set_stylebox(st[0], "Button", st[1])
@@ -140,7 +144,8 @@ static func theme() -> Theme:
 	t.set_font_size("font_size", "Button", 34)
 	t.set_color("font_color", "Button", TEXT)
 	t.set_color("font_hover_color", "Button", Color.WHITE)
-	t.set_color("font_pressed_color", "Button", Color.WHITE)
+	t.set_color("font_pressed_color", "Button", INK)        # (pressed: green with black text)
+	t.set_color("font_hover_pressed_color", "Button", INK)
 	t.set_color("font_disabled_color", "Button", Color(TEXT, 0.4))
 	t.set_color("icon_normal_color", "Button", TEXT)
 	t.set_constant("h_separation", "Button", 14)
@@ -159,13 +164,18 @@ static func theme() -> Theme:
 	# Ghost button
 	t.add_type("GhostButton")
 	t.set_type_variation("GhostButton", "Button")
-	t.set_stylebox("normal", "GhostButton", box(Color(0, 0, 0, 0), 24, 2, Color(1, 1, 1, 0.16), Vector4(26, 14, 26, 14)))
-	t.set_stylebox("hover", "GhostButton", box(Color(1, 1, 1, 0.06), 24, 2, Color(EMERALD, 0.6), Vector4(26, 14, 26, 14)))
+	t.set_color("font_pressed_color", "GhostButton", Color.WHITE)      # (its pressed look is a light green tint: white text)
+	t.set_color("font_hover_pressed_color", "GhostButton", Color.WHITE)
+	# (v1.1.15: a dark see-through fill instead of none, so the text reads over a bright table or room too)
+	t.set_stylebox("normal", "GhostButton", box(Color(BTN_BLACK, 0.6), 24, 2, Color(1, 1, 1, 0.2), Vector4(26, 14, 26, 14)))
+	t.set_stylebox("hover", "GhostButton", box(Color(BTN_BLACK_HI, 0.75), 24, 2, Color(EMERALD, 0.6), Vector4(26, 14, 26, 14)))
 	t.set_stylebox("pressed", "GhostButton", box(Color(EMERALD, 0.2), 24, 2, EMERALD, Vector4(26, 14, 26, 14)))
 	t.set_stylebox("hover_pressed", "GhostButton", box(Color(EMERALD, 0.2), 24, 2, EMERALD, Vector4(26, 14, 26, 14)))
 	# Chip (toggle pill)
 	t.add_type("ChipButton")
 	t.set_type_variation("ChipButton", "Button")
+	t.set_color("font_pressed_color", "ChipButton", Color.WHITE)      # (its pressed look is a light green tint: white text)
+	t.set_color("font_hover_pressed_color", "ChipButton", Color.WHITE)
 	t.set_stylebox("normal", "ChipButton", box(Color(1, 1, 1, 0.06), 40, 2, Color(1, 1, 1, 0.12), Vector4(24, 10, 24, 10)))
 	t.set_stylebox("hover", "ChipButton", box(Color(1, 1, 1, 0.1), 40, 2, Color(EMERALD, 0.5), Vector4(24, 10, 24, 10)))
 	t.set_stylebox("pressed", "ChipButton", box(Color(EMERALD, 0.22), 40, 2, EMERALD, Vector4(24, 10, 24, 10)))
@@ -174,8 +184,10 @@ static func theme() -> Theme:
 	# Icon round button
 	t.add_type("RoundButton")
 	t.set_type_variation("RoundButton", "Button")
-	t.set_stylebox("normal", "RoundButton", box(Color(0.07, 0.11, 0.18, 0.78), 60, 2, Color(1, 1, 1, 0.12), Vector4(16, 16, 16, 16), 6))
-	t.set_stylebox("hover", "RoundButton", box(Color(0.12, 0.18, 0.28, 0.9), 60, 2, Color(EMERALD, 0.6), Vector4(16, 16, 16, 16), 6))
+	t.set_color("font_pressed_color", "RoundButton", Color.WHITE)      # (its pressed look is a light green tint: white text)
+	t.set_color("font_hover_pressed_color", "RoundButton", Color.WHITE)
+	t.set_stylebox("normal", "RoundButton", box(Color(BTN_BLACK, 0.82), 60, 2, Color(EMERALD, 0.5), Vector4(16, 16, 16, 16), 6))
+	t.set_stylebox("hover", "RoundButton", box(Color(BTN_BLACK_HI, 0.9), 60, 2, EMERALD, Vector4(16, 16, 16, 16), 6))
 	t.set_stylebox("pressed", "RoundButton", box(Color(EMERALD, 0.35), 60, 2, EMERALD, Vector4(16, 16, 16, 16), 2))
 	t.set_stylebox("hover_pressed", "RoundButton", box(Color(EMERALD, 0.35), 60, 2, EMERALD, Vector4(16, 16, 16, 16), 2))
 	# Panels
@@ -291,7 +303,7 @@ static func button(text: String, variation := "", icon := "", min_w := 0.0) -> B
 		b.custom_minimum_size.x = min_w
 	b.focus_mode = Control.FOCUS_NONE
 	if icon != "":
-		var icol := INK if variation == "PrimaryButton" else TEXT
+		var icol := INK if variation == "PrimaryButton" else (EMERALD if variation == "" else TEXT)
 		var ic := IconGlyph.make(icon, 38, icol)
 		b.add_child(ic)
 		b.set_meta("icon_glyph", ic)

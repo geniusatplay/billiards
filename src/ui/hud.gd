@@ -29,7 +29,6 @@ var _drawer: Control
 var _btn_recenter: Button
 var _btn_adjust: Button
 var _btn_views: Array = []
-var _scheme_chip: Button
 var _ar_panel: PanelContainer
 var _ar_lbl: Label
 var _ar_badge: Label
@@ -203,11 +202,7 @@ func _build() -> void:
 			game.control.elevation = d)
 	spin_box.add_child(_spin)
 	spin_box.add_child(_elev)
-	# ---------------- scheme chip + hint
-	_scheme_chip = UIKit.button(Game.scheme_name(Game.scheme()), "ChipButton", "cue")
-	_scheme_chip.tooltip_text = "Switch cue control"
-	_scheme_chip.pressed.connect(_cycle_scheme)
-	add_child(_scheme_chip)
+	# ---------------- hint (v1.1.15: no cue-control chip: the Pro Dial is the only cue control)
 	_hint_lbl = UIKit.label("", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
 	_hint_lbl.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.06, 0.85))
 	_hint_lbl.add_theme_constant_override("outline_size", 8)
@@ -290,8 +285,6 @@ func on_language_changed() -> void:
 	_info_title.text = _title_text()
 	for c in _cards:
 		(c["name"] as Label).text = game.player_names[c["index"]]
-	if _scheme_chip:
-		_scheme_chip.text = Game.scheme_name(Game.scheme())
 	_refresh()
 	_update_hint()
 	propagate_call("queue_redraw")
@@ -438,7 +431,6 @@ func _layout() -> void:
 	_tools.position = Vector2(vp.x - 116 if right else 30, 150)
 	var spin_box := get_node("SpinBox") as Control
 	spin_box.position = Vector2(36 if right else vp.x - 320, vp.y - 290)
-	_scheme_chip.position = Vector2(36 if right else vp.x - 330, vp.y - 380)
 	_place_hint()
 	_power_lbl.position = Vector2(vp.x * 0.5 - 200, vp.y * 0.5 + 140)
 	_power_lbl.size = Vector2(400, 60)
@@ -447,7 +439,7 @@ func _layout() -> void:
 	_fl_panel.position = Vector2(vp.x - 116 - 24 - _fl_panel.size.x if right else 30 + 82 + 24, vp.y * 0.5 - _fl_panel.size.y * 0.5 + 40)
 	# the pot feed: under the player card, on the side away from the tool buttons
 	_feed.position = Vector2(30 if right else vp.x - 360, 236)
-	_feed.max_height = maxf(vp.y - 380.0 - 16.0 - 236.0, 160.0)    # down to the cue-control chip
+	_feed.max_height = maxf(vp.y - 290.0 - 16.0 - 236.0, 160.0)    # down to the spin pad
 	_toast.position = Vector2(vp.x * 0.5 - 600, _toast_top)
 	_toast.size = Vector2(1200, 60)
 	_banner.position = Vector2(vp.x * 0.5 - 420, vp.y * 0.36)
@@ -470,43 +462,9 @@ func _on_setting(k: String) -> void:
 	if k == "left_handed":
 		_layout()
 	if k == "control_scheme":
-		_scheme_chip.text = Game.scheme_name(Game.scheme())
 		_update_hint()
 	if k == "gear_drawer":
 		_refresh_tools()
-
-
-## Quick picker for the cue control (a popup grid instead of cycling through eight).
-func _cycle_scheme() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.45)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(dim)
-	var panel := UIKit.panel("Card")
-	var v := UIKit.vbox(14)
-	panel.add_child(v)
-	v.add_child(UIKit.label("Cue control", "H2Label"))
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 14)
-	grid.add_theme_constant_override("v_separation", 14)
-	v.add_child(grid)
-	for id in Game.SCHEMES:
-		var cur: bool = id == Game.scheme()
-		var b := UIKit.button(Game.scheme_name(id), "PrimaryButton" if cur else "GhostButton", "check" if cur else "")
-		b.custom_minimum_size = Vector2(300, 74)
-		b.pressed.connect(func():
-			dim.queue_free()
-			if id != Game.scheme():
-				Game.set_s("control_scheme", id)
-				toast(L.t("Cue control: %s") % Game.scheme_name(id), "info"))
-		grid.add_child(b)
-	dim.add_child(panel)
-	panel.position = (get_viewport().get_visible_rect().size - Vector2(680, 470)) * 0.5
-	dim.gui_input.connect(func(ev: InputEvent):
-		if ev is InputEventMouseButton and ev.pressed:
-			dim.queue_free())
-	UIKit.fade_in(panel)
 
 
 func _set_view(i: int) -> void:
@@ -734,7 +692,6 @@ func _on_state(s: int) -> void:
 	var aiming := s == PoolGame.State.AIM and game.is_human_turn() and not stage.free_look
 	_spin.visible = aiming
 	_elev.visible = aiming
-	_scheme_chip.visible = aiming
 	_show_ar_panel(s == PoolGame.State.PLACE_TABLE)
 	_hand_place.visible = s == PoolGame.State.BALL_IN_HAND and game.is_human_turn()
 	_update_hint()

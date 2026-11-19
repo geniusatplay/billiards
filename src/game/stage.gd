@@ -54,6 +54,9 @@ var _idle_spin := false
 
 # AR placement state
 var _ar_yaw := 0.0
+## v1.1.15 (Randy, 18 Nov: "the player should be able to rotate and scale the table size before placing it"): how far
+## the player has turned the table from its usual "long side across your view" while placing it. Kept for the launch.
+var preview_turn := 0.0
 var _ar_pos := Vector3.ZERO
 var _ar_scale := 0.28
 var _reticle: MeshInstance3D
@@ -1169,7 +1172,7 @@ func _update_preview() -> void:
 	var r := ar_cam.global_basis.x
 	r.y = 0.0
 	if r.length() > 0.05:
-		_ar_yaw = atan2(-r.z, r.x)
+		_ar_yaw = atan2(-r.z, r.x) + preview_turn
 	var centre := get_viewport().get_visible_rect().size * 0.5
 	var p: Variant = null
 	if arcore.hit_valid:
@@ -1217,8 +1220,26 @@ func _update_float_preview() -> void:
 	var r := ar_cam.global_basis.x
 	r.y = 0.0
 	if r.length() > 0.05:
-		_ar_yaw = atan2(-r.z, r.x)
+		_ar_yaw = atan2(-r.z, r.x) + preview_turn
 	_layout_table()
+
+
+## The table is shown where it will go and waits for Place: it can be turned and sized now.
+func previewing() -> bool:
+	return mode == Mode.WORLD_AR and not placed and ar_state == ArState.RUNNING
+
+
+## Turn the table being placed by `d` radians (+ = anticlockwise seen from above).
+func turn_preview(d: float) -> void:
+	preview_turn = wrapf(preview_turn + d, -PI, PI)
+	if mode == Mode.WORLD_AR and not placed:
+		_ar_yaw = wrapf(_ar_yaw + d, -PI, PI)
+		_layout_table()
+
+
+## Size the table being placed (the same World size as Settings → World; Mini and Life-size follow it).
+func resize_preview(v: float) -> void:
+	Game.set_world_size(v)
 
 
 ## Can the player tap Place right now?
@@ -1315,7 +1336,7 @@ func handle_gesture(ev: InputEvent) -> bool:
 			if adjusting and _touches.is_empty():
 				_reanchor()
 		_gesture_start = {"touches": _touches.duplicate(), "scale": _ar_scale, "yaw": _ar_yaw, "pos": _ar_pos,
-			"dist": _dist, "oyaw": _yaw, "opitch": _pitch}
+			"dist": _dist, "oyaw": _yaw, "opitch": _pitch, "turn": preview_turn, "wsize": Game.world_size()}
 		return _touches.size() >= 2 or (adjusting and _touches.size() == 1)
 	if ev is InputEventScreenDrag:
 		if not _touches.has(ev.index):
@@ -1331,7 +1352,13 @@ func handle_gesture(ev: InputEvent) -> bool:
 			var s0 := maxf(a0.distance_to(b0), 1.0)
 			var ratio := a1.distance_to(b1) / s0
 			var rot := (b1 - a1).angle() - (b0 - a0).angle()
-			if adjusting:
+			if previewing() and not adjusting:
+				# placing: pinch sizes the table (World size), twist turns it
+				var ws := clampf(float(_gesture_start["wsize"]) * ratio, Game.WORLD_MIN, Game.WORLD_MAX)
+				if absf(ws - Game.world_size()) > 0.004:
+					resize_preview(ws)
+				turn_preview(wrapf(float(_gesture_start["turn"]) - rot - preview_turn, -PI, PI))
+			elif adjusting:
 				_ar_scale = clampf(float(_gesture_start["scale"]) * ratio, 0.08, 1.3)
 				_ar_yaw = float(_gesture_start["yaw"]) - rot
 				if floating():

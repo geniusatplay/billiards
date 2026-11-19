@@ -294,7 +294,6 @@ class SettingsScreen extends MenuScreens.Screen:
 		w.add_child(wn)
 		# ---- Cue & aiming
 		var c := S.card(right, "Cue & aiming", "cue")
-		S.choice(c, "Cue control", "control_scheme", Game.SCHEMES, Game.SCHEMES.map(func(k): return Game.scheme_name(k)))
 		S.choice(c, "Aim guide", "aim_guide", [0, 1, 2, 3], ["Off (real pool)", "Short line", "Ghost ball", "Full prediction"])
 		S.big_slider(c, "target", "Fine-aim sensitivity", float(Game.get_s("fine_aim_scale")), 0.25, 3.0, 0.05,
 			func(x: float) -> String: return "%.2f×" % x, func(x: float): Game.set_s("fine_aim_scale", x))
@@ -442,6 +441,12 @@ class DebugMenu extends Control:
 		var tp := UIKit.button("Play it now", "ChipButton", "play")
 		tp.pressed.connect(func(): router.call("debug_play_tutorial"))
 		tu.add_child(tp)
+		# v1.1.15: how this phone draws the XP chest and the packages (Randy: "the XP chests aren't visible")
+		var pk := S.section(body, "Package pictures")
+		var pk_l := UIKit.label({-1: "Not drawn yet this launch (open the main menu first)",
+			0: "3D (the phone draws them)", 1: "Baked pictures: %s" % PackageView.flat_reason}[PackageView.flat_mode], "MutedLabel")
+		pk_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		pk.add_child(pk_l)
 		var ar := S.section(body, "AR")
 		S.toggle(ar, "Scene background in AR (a different one every match)", "ar_background")
 		S.slider(ar, "AR scale — mini", "ar_scale_desk", 0.08, 0.6, 0.01, "%.2fx")

@@ -47,8 +47,7 @@ class PauseMenu extends Control:
 		var v := UIKit.vbox(14)
 		v.custom_minimum_size = Vector2(560, 0)
 		cols.add_child(v)
-		var items := [["Resume", "play", "resume", "PrimaryButton"], ["Restart", "refresh", "restart", ""],
-			[L.t("Cue controls: %s") % Game.scheme_name(Game.scheme()), "cue", "cycle_scheme", ""]]
+		var items := [["Resume", "play", "resume", "PrimaryButton"], ["Restart", "refresh", "restart", ""]]
 		if router.call("is_online"):
 			items.remove_at(1)      # an online match cannot be restarted, and the clock keeps running
 		items.append([_music_text(), "sound", "toggle_music", ""])
@@ -60,11 +59,7 @@ class PauseMenu extends Control:
 			var b := UIKit.button(it[0], it[3], it[1], 560)
 			var act: String = it[2]
 			b.pressed.connect(func():
-				if act == "cycle_scheme":
-					var i := Game.SCHEMES.find(Game.scheme())
-					Game.set_s("control_scheme", Game.SCHEMES[(i + 1) % Game.SCHEMES.size()])
-					b.text = L.t("Cue controls: %s") % Game.scheme_name(Game.scheme())
-				elif act == "toggle_music":
+				if act == "toggle_music":
 					Game.set_s("music_in_game", not bool(Game.get_s("music_in_game")))
 					b.text = _music_text()
 				else:

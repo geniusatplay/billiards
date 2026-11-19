@@ -203,9 +203,15 @@ func reset_table(keep_height := false) -> void:
 	request_save()
 
 
+## Randy, 18 Nov 2026: "the pro dial should be the only aiming option". Players always get the Pro Dial (an older
+## save's other choice is ignored). The other controls stay in the code only for the automated tour, which drives
+## shots through them (it sets any_scheme).
+static var any_scheme := false
+
+
 func scheme() -> String:
 	var s: String = get_s("control_scheme")
-	return s if s in SCHEMES else "slingshot"
+	return s if any_scheme and s in SCHEMES else "pro_dial"
 
 
 func table_style() -> Dictionary:

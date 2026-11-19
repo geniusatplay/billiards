@@ -723,6 +723,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 				if _pause: resume()
 				elif game: pause()
 				elif _stack.size() > 1: back()
+	if game == null and not get_tree().paused and stage.previewing() and stage.handle_gesture(ev):
+		get_viewport().set_input_as_handled()      # (Place world from the menu: pinch / twist the table being placed)
+		return
 	if game == null or get_tree().paused:
 		return
 	# 2-finger camera / AR gestures take priority unless the cue control is mid-stroke
@@ -1087,7 +1090,7 @@ func _store_shots(dir: String) -> void:
 	Game.pretend_store = true
 	Game.settings_changed.emit("fps_counter")
 	Game.set_s("ar_mode", "studio")
-	Game.set_s("control_scheme", "slingshot")
+	Game.set_s("control_scheme", "pro_dial")     # (the only cue control players have)
 	Game.set_s("surface", "floor")
 	Game.progress_changed.emit()
 	# two real breaks give the mid-game tables
@@ -1159,6 +1162,15 @@ func _store_break_layout(yaw: float) -> Dictionary:
 			lay[int(game.sim.num[i])] = game.sim.pos[i]
 	_end_match()
 	return lay
+
+
+func _opaque_count(img: Image) -> int:
+	var n := 0
+	for y in range(0, img.get_height(), 4):
+		for x in range(0, img.get_width(), 4):
+			if img.get_pixel(x, y).a > 0.5:
+				n += 1
+	return n
 
 
 func _store_lay_to(lay: Dictionary) -> Dictionary:
@@ -1647,6 +1659,7 @@ func _human_shot(yaw: float, power: float, offset: Vector2, slow: bool) -> void:
 
 
 func _run_tour(dir: String) -> void:
+	Game.any_scheme = true      # (the scripted shots use the other cue controls; players only ever get the Pro Dial)
 	DirAccess.make_dir_recursive_absolute(dir)
 	_tour_dir = dir
 	Game.settings["unlock_all"] = false     # the tour looks at the game as a player has it (the default is on while testing)
@@ -1658,11 +1671,11 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
-		if only == "" and s in ["perf", "ios_check", "store", "breakview"]:
+		if only == "" and s in ["perf", "ios_check", "store", "breakview", "pkbake"]:
 			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator)
 		Game.world_ready = "studio" if s != "world" else ""   # (v1.1.15: the world is chosen; the "world" step tests choosing it)
 		await _tour_step(dir, s)
@@ -3736,7 +3749,10 @@ func _tour_step(dir: String, s: String) -> void:
 				ui_root.add_child(pv)
 				await _wait(1.2)
 				var nm := "xp" if pk_i == 5 else str(pk_i + 1)
-				pk_ok = pk_ok and pv.get("_lid") != null and (pv.get("_lid") as Node3D).get_child_count() > 0
+				if PackageView.flat_mode == 1:
+					pk_ok = pk_ok and pv.get("_flat") != null and (pv.get("_flat") as TextureRect).texture != null    # (baked picture)
+				else:
+					pk_ok = pk_ok and pv.get("_lid") != null and (pv.get("_lid") as Node3D).get_child_count() > 0
 				await _shot(dir, "pk_%s_shut" % nm)
 				pv.open()
 				await pv.opened
@@ -3745,11 +3761,143 @@ func _tour_step(dir: String, s: String) -> void:
 				pv.queue_free()
 				await _wait(0.2)
 			pk_bg.queue_free()
-			print("PACKAGES %s" % ("PASS" if pk_ok else "FAIL (a model has no lid)"))
+			print("PACKAGES %s" % ("PASS" if pk_ok else "FAIL (a model has no lid, or no baked picture)"))
 		"perf":
 			await _perf_tour(dir)
 		"store":
 			await _store_shots(dir)
+		"placeturn":
+			# Randy, 18 Nov: "the player should be able to rotate and scale the table size before placing it" (simulated
+			# ARCore): the turn arrows, the size slider and two-finger twist / pinch change the table being placed, and
+			# Place keeps exactly that turn and size
+			var pt := []
+			var ptchk := func(t: String, ok: bool):
+				pt.append(ok)
+				print("  %s %s" % ["ok  " if ok else "FAIL", t])
+			stage.arcore.simulate = true
+			stage.arcore.sim_floor = 0.0
+			stage.arcore.sim_path = func(_t: float) -> Transform3D:
+				var eye := Vector3(0.0, 1.5, 0.4)
+				return Transform3D(Basis.looking_at(Vector3(0, 0, -2.4) - eye, Vector3.UP), eye)
+			Game.set_s("ar_mode", "auto")
+			Game.set_world_size(1.0)
+			stage.preview_turn = 0.0
+			start_match({"mode": "practice"})
+			await _wait(1.5)
+			await _shot(dir, "placeturn_start")
+			var panel: ArPlacePanel = hud.get("_ar_panel")
+			ptchk.call("the turn arrows and the size slider are on the placing panel", panel.adjust.visible and panel.turn_r.is_visible_in_tree() and panel.size_slider.is_visible_in_tree())
+			var yaw0: float = stage.get("_ar_yaw")
+			for k in 2:
+				var tc := panel.turn_r.get_global_rect().get_center()
+				await _touch(0, tc, true)
+				await _touch(0, tc, false)
+				await _wait(0.15)
+			var yaw1: float = stage.get("_ar_yaw")
+			ptchk.call("two taps on turn right: the table turned 30° (%.1f°)" % rad_to_deg(angle_difference(yaw0, yaw1)), absf(angle_difference(yaw0, yaw1) + deg_to_rad(30.0)) < 0.01)
+			panel.size_slider.value = 0.5
+			await _wait(0.2)
+			ptchk.call("the size slider sizes it (world size %.2f, table scale %.2f, Mini chip on)" % [Game.world_size(), stage.table_scale()], absf(Game.world_size() - 0.5) < 0.01 and absf(stage.table_scale() - 0.5) < 0.01 and Game.get_s("surface") == "desk")
+			await _shot(dir, "placeturn_turned_half")
+			# two fingers: pinch apart (1.6×) and twist 20°
+			var c0 := Vector2(960, 300)        # (over the room, above the placing panel)
+			var a0 := c0 + Vector2(-150, 0)
+			var b0 := c0 + Vector2(150, 0)
+			await _touch(0, a0, true)
+			await _touch(1, b0, true)
+			var turn_before := stage.preview_turn
+			for f in 6:
+				var k := float(f + 1) / 6.0
+				var ang := deg_to_rad(20.0) * k
+				var r := 150.0 * lerpf(1.0, 1.6, k)
+				await _drag(0, c0 - Vector2(cos(ang), sin(ang)) * r)
+				await _drag(1, c0 + Vector2(cos(ang), sin(ang)) * r)
+			await _touch(0, c0 - Vector2(cos(deg_to_rad(20.0)), sin(deg_to_rad(20.0))) * 240.0, false)
+			await _touch(1, c0 + Vector2(cos(deg_to_rad(20.0)), sin(deg_to_rad(20.0))) * 240.0, false)
+			await _wait(0.2)
+			ptchk.call("pinch apart 1.6×: bigger (world size %.2f)" % Game.world_size(), absf(Game.world_size() - 0.8) < 0.03)
+			ptchk.call("twist 20°: turned 20° more (%.1f°)" % rad_to_deg(angle_difference(turn_before, stage.preview_turn)), absf(absf(angle_difference(turn_before, stage.preview_turn)) - deg_to_rad(20.0)) < deg_to_rad(1.0))
+			await _shot(dir, "placeturn_pinched")
+			var yaw_b: float = stage.get("_ar_yaw")
+			var sc_b := stage.table_scale()
+			var pb2: Button = hud.get("_ar_place")
+			var pc2 := pb2.get_global_rect().get_center()
+			await _touch(0, pc2, true)
+			await _touch(0, pc2, false)
+			await _wait(0.5)
+			ptchk.call("Place keeps that turn and size", stage.placed and absf(angle_difference(yaw_b, stage.get("_ar_yaw"))) < 0.001 and absf(stage.table_scale() - sc_b) < 0.001)
+			await _shot(dir, "placeturn_placed")
+			stage.arcore.simulate = false
+			stage.preview_turn = 0.0
+			Game.set_world_size(0.28)
+			print("PLACETURN %s" % ("PASS" if not pt.has(false) else "FAIL"))
+		"startaim":
+			# Randy, 18 Nov: "in all other game modes, the pool stick should just be aiming the cue ball at the closest
+			# ball, not lined up with a hole": every turn of a player here starts aimed straight at the closest ball they
+			# may hit (any ball in practice and on the break; their own group, or the 8 when it's next, otherwise)
+			var sa_ok := true
+			var sa_n := 0
+			for cfg in [{"mode": "practice"}, {"mode": "versus", "vs_ai": false}, {"mode": "versus", "vs_ai": true, "ai_level": 1}]:
+				start_match(cfg)
+				await _wait(1.2)
+				var rng := RandomNumberGenerator.new()
+				rng.seed = 5150
+				var turns := 0
+				var tries := 0
+				while turns < 6 and tries < 400 and game != null:
+					tries += 1
+					await _wait(0.1)
+					if game.state == PoolGame.State.BALL_IN_HAND and game.is_human_turn():
+						game.confirm_cue_placement()
+						await _wait(0.1)
+					if game.state != PoolGame.State.AIM or not game.is_human_turn():
+						if game.sim.is_moving():
+							game.fast_forward()
+						continue
+					var c := game.cue_ball_pos()
+					var legal: Array = game.rules.legal_targets(game.sim, game.current)
+					var best := -1
+					var bd := INF
+					for i in game.sim.n:
+						if game.sim.st[i] == PoolSim.ST_POCKETED or game.sim.num[i] == 0:
+							continue
+						if cfg["mode"] == "versus" and not game.rules.is_break and not (game.sim.num[i] in legal):
+							continue
+						var d := game.sim.pos[i].distance_to(c)
+						if d < bd:
+							bd = d
+							best = i
+					var want := (game.sim.pos[best] - c).angle() if best >= 0 else 0.0
+					var off := absf(angle_difference(game.control.yaw, want))
+					sa_n += 1
+					if off > 0.002:
+						sa_ok = false
+						print("  START AIM OFF [%s turn %d]: %.2f° from the closest ball" % [str(cfg), turns, rad_to_deg(off)])
+					turns += 1
+					game.fire(game.control.yaw + rng.randf_range(-0.6, 0.6), rng.randf_range(0.35, 0.8), Vector2.ZERO, 0.0)
+					await _wait(0.4)
+					game.fast_forward()
+				_end_match()
+				await _wait(0.4)
+			print("STARTAIM %s (%d turns checked)" % ["PASS" if sa_ok and sa_n >= 12 else "FAIL", sa_n])
+		"pkbake":
+			# the baked pictures of the packages and the XP chest (PackageView falls back to them on a phone that can't
+			# draw the 3D picture): 512 px, transparent, from the same camera, at rest
+			var pk_dir := ProjectSettings.globalize_path("res://assets/icons/packages")
+			DirAccess.make_dir_recursive_absolute(pk_dir)
+			for pk_i in 6:
+				var pv: PackageView = PackageView.xp_chest(512.0) if pk_i == 5 else PackageView.new(pk_i + 1, 512.0)
+				pv.set_live(false)
+				ui_root.add_child(pv)
+				for k in 8:
+					await RenderingServer.frame_post_draw
+				var pk_img: Image = (pv.get("_vp") as SubViewport).get_texture().get_image()
+				pk_img.resize(512, 512, Image.INTERPOLATE_LANCZOS)
+				var pk_nm := "xp_chest" if pk_i == 5 else "pk_%d" % (pk_i + 1)
+				pk_img.save_png(pk_dir.path_join(pk_nm + ".png"))
+				print("PKBAKE %s (%d drawn pixels)" % [pk_nm, _opaque_count(pk_img)])
+				pv.queue_free()
+				await _wait(0.2)
 		"breakview":
 			# a head-on break seen from above, for judging how the rack spreads (record with --write-movie):
 			# --bpow=0.85 power, --byaw=0 degrees off the line through the foot spot
@@ -4446,13 +4594,13 @@ func _tour_step(dir: String, s: String) -> void:
 			var stacked: bool = rects.size() == 3 and rects[0].end.y <= rects[1].position.y + 1.0 and rects[1].end.y <= rects[2].position.y + 1.0
 			fchk.call("... one under the other, the newest at the bottom", stacked)
 			var vp := get_viewport().get_visible_rect()
-			var chip_r: Rect2 = (hud.get("_scheme_chip") as Control).get_global_rect()
+			var chip_r: Rect2 = (hud.get_node("SpinBox") as Control).get_global_rect()     # (the spin pad under the feed)
 			var card_r: Rect2 = (hud.get("_cards")[0]["panel"] as Control).get_global_rect()
 			var inside := true
 			for r in rects:
 				if not vp.encloses(r) or r.intersects(chip_r) or r.intersects(card_r):
 					inside = false
-			fchk.call("... on screen, clear of the player card and the cue-control chip", inside)
+			fchk.call("... on screen, clear of the player card and the spin pad", inside)
 			# the table stops being open
 			game.rules.groups = [EightBall.Group.SOLIDS, EightBall.Group.STRIPES]
 			game.groups_set.emit()
@@ -4642,7 +4790,7 @@ func _tour_step(dir: String, s: String) -> void:
 				await _wait(0.4)
 				lf_problems += _audit_text(code, "pot_feed_free_look")
 				var lpf: PotFeed = hud.pot_feed()
-				var chip: Rect2 = (hud.get("_scheme_chip") as Control).get_global_rect()
+				var chip: Rect2 = (hud.get_node("SpinBox") as Control).get_global_rect()
 				for slot in lpf.get_child(0).get_children():
 					var cr: Rect2 = (slot.get_child(0) as Control).get_global_rect()
 					if not get_viewport().get_visible_rect().encloses(cr) or cr.size.x > 560.0 or cr.intersects(chip):

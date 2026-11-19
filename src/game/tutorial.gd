@@ -6,7 +6,7 @@ extends Control
 ## objective, the next objective comes only when this one is met, Skip leaves at any time (and doesn't count), and the
 ## end gives the gift chest that opens at once. Five versions (VERSIONS) share the objectives and differ in which
 ## objectives and how they are shown:
-##   0 Coach marks      - a pointer at the control to use, six objectives
+##   0 Coach marks      - a pointer at the control to use, five objectives (the one the game plays)
 ##   1 Three challenges - a checklist of three set-up shots
 ##   2 Quick start      - three objectives, the fastest
 ##   3 Watch, then you  - each shot is shown first (the cue turns to the right line), then the player copies it
@@ -16,7 +16,7 @@ extends Control
 signal finished(done: bool)
 
 const VERSIONS := [
-	{"name": "Coach marks", "steps": ["aim", "pot", "cut", "draw", "hand", "eight"]},
+	{"name": "Coach marks", "steps": ["aim", "pot", "cut", "draw", "eight"]},     # (Randy, 18 Nov: no ball-in-hand step)
 	{"name": "Three challenges", "steps": ["pot", "draw", "hand"]},
 	{"name": "Quick start", "steps": ["aim", "pot", "eight"]},
 	{"name": "Watch, then you", "steps": ["pot", "cut", "draw"]},
@@ -25,7 +25,7 @@ const VERSIONS := [
 ## What each objective asks, in the order: title, how to do it, and (version 4) what the coach says.
 const TEXT := {
 	"aim": ["Aim at the yellow ball", "Turn the cue until it points at the yellow 1-ball.", "Let's start with aiming: turn the cue to the yellow ball."],
-	"pot": ["Pot the yellow ball", "Send the yellow ball into the far pocket. The guide line shows where it will go.", "Now pot it into the far pocket."],
+	"pot": ["Pot the yellow ball", "Send the yellow ball into the far pocket.", "Now pot it into the far pocket."],
 	"cut": ["Pot a ball at an angle", "Hit the yellow ball on its side to send it into the corner pocket.", "Angles next: clip it into the corner."],
 	"draw": ["Pot it with backspin", "Drag the dot on the white ball (bottom left) down, then shoot: the white ball comes back.", "Hit low on the white ball and it comes back."],
 	"hand": ["Ball in hand", "After a foul you get ball in hand: drag the white ball to a clear spot, then tap Place ball.", "My foul! Ball in hand: drag the white ball anywhere, then tap Place ball."],
@@ -752,7 +752,8 @@ func _complete() -> void:
 	var open := UIKit.button("Open chest", "PrimaryButton", "gift", 380)
 	open.name = "TutorialOpenChest"
 	open.visible = not Game.gift_chests().is_empty()
-	var menu := UIKit.button("Main menu", "" if open.visible else "PrimaryButton", "home", 320)
+	# (Randy, 18 Nov: bright green like the main theme, not small and blue)
+	var menu := UIKit.button("Main menu", "PrimaryButton", "home", 380)
 	menu.name = "TutorialMenu"
 	row.add_child(open)
 	row.add_child(menu)
@@ -771,8 +772,7 @@ func _complete() -> void:
 			end.add_child(card)
 			await card.closed
 		if is_inside_tree():
-			open.visible = false
-			menu.theme_type_variation = "PrimaryButton")
+			open.visible = false)
 	menu.pressed.connect(func():
 		finished.emit(true)
 		main.call("quit_to", "menu"))

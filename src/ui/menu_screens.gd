@@ -164,9 +164,6 @@ class MainMenu extends Screen:
 		var pr := UIKit.button("Practice", "", "practice", 520)
 		pr.pressed.connect(func(): router.call("play", "practice"))
 		col.add_child(pr)
-		var cc := UIKit.button("Cue Controls", "", "cue", 520)
-		cc.pressed.connect(func(): router.call("go", "controls"))
-		col.add_child(cc)
 		var row := UIKit.hbox(18)
 		var st := UIKit.button("Settings", "GhostButton", "gear")
 		st.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -261,7 +258,7 @@ class MainMenu extends Screen:
 		var has := not q.is_empty()
 		var rc := GearScreens.rarity_color(XP.rarity_of_level(int(q[0]))) if has else Color(1, 1, 1, 0.14)
 		for st in ["normal", "hover", "pressed", "focus"]:
-			pk.add_theme_stylebox_override(st, UIKit.box(Color(0.07, 0.11, 0.18, 0.94), 22, 3 if has else 2, rc, Vector4(0, 0, 0, 0)))
+			pk.add_theme_stylebox_override(st, UIKit.box(UIKit.BTN_BLACK, 22, 3 if has else 2, rc, Vector4(0, 0, 0, 0)))
 		if has:
 			var view := PackageView.new(XP.rarity_of_level(int(q[0])), 150.0)
 			view.position = Vector2(8, 10)
@@ -314,7 +311,7 @@ class MainMenu extends Screen:
 		b.name = "XpChest"
 		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		for st in ["normal", "hover", "pressed", "focus"]:
-			b.add_theme_stylebox_override(st, UIKit.box(Color(0.07, 0.11, 0.18, 0.94), 22, 3 if ready else 2,
+			b.add_theme_stylebox_override(st, UIKit.box(UIKit.BTN_BLACK, 22, 3 if ready else 2,
 				PackageView.XP_GOLD if ready else Color(1, 1, 1, 0.14), Vector4(0, 0, 0, 0)))
 		var view := PackageView.xp_chest(150.0)
 		view.position = Vector2(6, 10)
