@@ -499,6 +499,16 @@ class DebugMenu extends Control:
 		S.toggle(dg, "AR tracking status line", "show_fps")
 		S.toggle(dg, "Unlock every cue, table, ball set and scene (testing)", "unlock_all")
 		S.toggle(dg, "Show advert stand-ins (adverts are off)", "ad_standins")
+		S.toggle(dg, "Stand-ins look like real adverts (sample adverts)", "ad_sample")
+		# v1.1.15: one sample advert of each kind, at once
+		var ad_row := HFlowContainer.new()
+		ad_row.add_theme_constant_override("h_separation", 12)
+		ad_row.add_theme_constant_override("v_separation", 12)
+		for am in [["Sample advert: between matches", "after_match"], ["Sample advert: XP chest (rewarded)", "xp_chest"]]:
+			var ab := UIKit.button(am[0], "ChipButton", "play")
+			ab.pressed.connect(func(): Ads.preview(am[1]))
+			ad_row.add_child(ab)
+		dg.add_child(ad_row)
 		var xp_row := UIKit.hbox(12)
 		for amount in [100, 1000, 5000]:
 			var xb := UIKit.button("+%d XP" % amount, "ChipButton")

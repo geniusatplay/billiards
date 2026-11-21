@@ -1568,10 +1568,16 @@ func _store_one(dir: String, id: String, lay_a: Dictionary, lay_b: Dictionary) -
 		"19":
 			_end_match()
 			_store_gear("synth", "neon", "cue_neon", "balls")
+			# two packages ready to open in the corner, beside the ready XP chest (v1.1.15: the tile is labelled)
+			Game.progress["packages"] = [26, 27]
+			Game.progress["pk_time"] = {}
+			Game.progress_changed.emit()
 			_stack.clear()
 			go("menu")
 			await _wait(3.0)
 			await _shot(dir, "store_19")
+			Game.progress["packages"] = []
+			Game.progress_changed.emit()
 		"20":
 			# the tutorial: an objective on the table, the ball it's about ringed in gold
 			_end_match()
@@ -1671,7 +1677,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -3880,6 +3886,190 @@ func _tour_step(dir: String, s: String) -> void:
 				_end_match()
 				await _wait(0.4)
 			print("STARTAIM %s (%d turns checked)" % ["PASS" if sa_ok and sa_n >= 12 else "FAIL", sa_n])
+		"pkcorner":
+			# the menu's packages tile, labelled like the XP chest beside it (Randy, 21 Nov: "please label what the gift
+			# box is on the right side at the menu similarly to the xp chests display"): no packages, one unlocking, two
+			# ready; the words are in the tile, inside its edges, in English and in a long language
+			var pcbad: Array = []
+			var pcchk := func(t: String, ok: bool, detail := "") -> void:
+				if not ok:
+					pcbad.append(t)
+				print("  %s  %s  %s" % ["ok  " if ok else "FAIL", t, detail])
+			var pc_keep: Dictionary = Game.progress.duplicate(true)
+			var pc_lang: String = Game.get_s("language")
+			Game.set_s("ar_mode", "studio")
+			# every language: the words fit on one line (made smaller if need be, never below 22 px) and "No packages to
+			# open" takes at most two lines; pictures of English and Indonesian
+			var fits := func(lb: Label) -> bool:
+				if lb == null:
+					return false
+				var fpx := lb.get_theme_font_size("font_size")
+				var fw := lb.get_theme_font("font").get_string_size(lb.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fpx).x
+				return fw <= lb.size.x + 1.0 and fpx >= 22
+			for pc_l in Loc.codes():
+				Loc.set_language(pc_l)
+				for pc_case in (["none", "wait", "ready"] if pc_l in ["en", "id"] else ["none", "ready"]):
+					Game.progress["packages"] = [] if pc_case == "none" else ([45] if pc_case == "wait" else [26, 27])
+					Game.progress["pk_time"] = {"45": Game.now() - 60} if pc_case == "wait" else {}
+					Game.progress_changed.emit()
+					_stack.clear()
+					go("menu")
+					await _wait(1.4 if pc_l in ["en", "id"] else 0.7)
+					var pkb: Control = _screen.find_child("PackagesButton", true, false)
+					var pkt: Label = _screen.find_child("PackagesTitle", true, false)
+					var pks: Label = _screen.find_child("PackagesStatus", true, false)
+					if pks == null:
+						pks = _screen.find_child("PackageWait", true, false)
+					var chest: Control = _screen.find_child("XpChest", true, false)
+					var want := L.t("No packages to open") if pc_case == "none" else (L.t("Ready!") if pc_case == "ready" else "")
+					pcchk.call("%s, %s: the tile says %s and %s" % [pc_l, pc_case, L.t("Packages"), want if want != "" else "the time left"],
+						pkb != null and pkt != null and pks != null and pkt.text == L.t("Packages") and (pks.text == want if want != "" else pks.text.contains(":")),
+						pks.text if pks else "")
+					var inside := true
+					if pkb and pkt and pks:
+						var r := pkb.get_global_rect().grow(-2)
+						for lb in [pkt, pks]:
+							inside = inside and r.encloses((lb as Control).get_global_rect())
+					pcchk.call("%s, %s: the words stay inside the tile" % [pc_l, pc_case], inside,
+						"%s / %s" % [pkt.get_global_rect() if pkt else "", pks.get_global_rect() if pks else ""])
+					pcchk.call("%s, %s: the tile is as tall as the XP chest's and does not run into it" % [pc_l, pc_case],
+						chest != null and pkb != null and absf(pkb.size.y - chest.size.y) < 1.0 and not pkb.get_global_rect().intersects(chest.get_global_rect()))
+					if pc_case != "none":
+						var cnt: Label = _screen.find_child("PackagesCount", true, false)
+						pcchk.call("%s, %s: the count shows" % [pc_l, pc_case], cnt != null and cnt.text == "×%d" % (Game.progress["packages"] as Array).size())
+					var ctl: Label = _screen.find_child("ChestTitle", true, false)
+					var one_line := [pkt, ctl] + ([pks] if pc_case != "none" else [])
+					var all_fit := true
+					for lb in one_line:
+						all_fit = all_fit and fits.call(lb)
+					pcchk.call("%s, %s: Packages, XP chest%s fit in full" % [pc_l, pc_case, "" if pc_case == "none" else " and the status"], all_fit,
+						"%s %d px / %s %d px" % [pkt.text, pkt.get_theme_font_size("font_size"), ctl.text if ctl else "?", ctl.get_theme_font_size("font_size") if ctl else 0])
+					if pc_case == "none":
+						pcchk.call("%s: \"%s\" takes at most two lines" % [pc_l, pks.text], pks.get_line_count() <= 2, "%d lines" % pks.get_line_count())
+					if pc_l in ["en", "id"]:
+						await _shot(dir, "pkcorner_%s_%s" % [pc_l, pc_case])
+			Loc.set_language(pc_lang)
+			Game.progress = pc_keep
+			Game.progress_changed.emit()
+			print("PKCORNER %s %s" % ["PASS" if pcbad.is_empty() else "FAIL", str(pcbad)])
+		"adsample":
+			# the sample adverts (Randy, 21 Nov: "create an apk version which lets me preview how the ads will look (with a
+			# fake ad showing in place of what the actual ads will look like"): the interstitial between matches (close
+			# after a 5-second countdown), the rewarded video (reward after 15 s; closing early asks first and gives no
+			# reward), the Developer tools buttons, and the plain stand-in when samples are off
+			var asbad: Array = []
+			var aschk := func(t: String, ok: bool, detail := "") -> void:
+				if not ok:
+					asbad.append(t)
+				print("  %s  %s  %s" % ["ok  " if ok else "FAIL", t, detail])
+			var as_keep: Dictionary = Game.settings.duplicate()
+			Game.settings["ad_sample"] = true
+			Game.settings["ad_standins"] = true
+			_end_match()
+			_stack.clear()
+			go("menu")
+			await _wait(0.8)
+			var ares := {"done": 0, "skipped": 0}
+			var find_ad := func() -> AdSample:
+				for n in Ads.find_children("*", "", true, false):
+					if n is AdSample and not n.is_queued_for_deletion():
+						return n
+				return null
+			# ---- between matches: the interstitial
+			Ads.show("after_match", func(): ares["done"] += 1)
+			await _wait(1.2)
+			var ad: AdSample = find_ad.call()
+			var acl: Button = ad.find_child("AdClose", true, false) if ad else null
+			var acn: Label = ad.find_child("AdCount", true, false) if ad else null
+			aschk.call("between matches: the sample interstitial is up, its close button counts down (%s)" % (acn.text if acn else "?"),
+				ad != null and not ad.rewarded and acl != null and acl.disabled and acn.visible and acn.text == "4"
+				and ad.find_child("AdBadge", true, false) != null and ad.find_child("AdInstall", true, false) != null)
+			await _shot(dir, "ads_inter_countdown")
+			acl.pressed.emit()
+			await _wait(0.2)
+			aschk.call("... a tap on it before the countdown ends does nothing", find_ad.call() == ad and ares["done"] == 0)
+			(ad.find_child("AdInstall", true, false) as Button).pressed.emit()
+			await _wait(0.2)
+			aschk.call("... Install says what a real advert would do", (ad.find_child("AdNote", true, false) as Label).text.begins_with("A real advert would open"))
+			await _wait(4.0)
+			aschk.call("... after 5 seconds the close button is an X", not acl.disabled and not acn.visible and (acl.get_node("AdCloseX") as CanvasItem).visible)
+			await _shot(dir, "ads_inter_close")
+			acl.pressed.emit()
+			await _wait(0.3)
+			aschk.call("... closing it carries on (once)", find_ad.call() == null and ares["done"] == 1)
+			# ---- the XP chest's rewarded video, watched to the end
+			Ads.show("xp_chest", func(): ares["done"] += 1, func(): ares["skipped"] += 1)
+			await _wait(1.2)
+			ad = find_ad.call()
+			acl = ad.find_child("AdClose", true, false) if ad else null
+			var pill: Label = (ad.get("_pill") as Label) if ad else null
+			aschk.call("XP chest: the rewarded sample plays, \"%s\", no close button yet" % (pill.text if pill else "?"),
+				ad != null and ad.rewarded and pill != null and pill.text == "Reward in 14 s" and not acl.visible)
+			await _shot(dir, "ads_rewarded_start")
+			await _wait(2.4)
+			aschk.call("... after 3 seconds the close button shows", acl.visible)
+			acl.pressed.emit()
+			await _wait(0.3)
+			var dlg: Control = ad.find_child("AdCloseDialog", true, false)
+			var t_ask: float = ad.t
+			aschk.call("... closing before the reward asks first: Close video? You will lose your reward.", dlg != null and ares["done"] == 1 and ares["skipped"] == 0)
+			await _shot(dir, "ads_rewarded_ask")
+			await _wait(1.0)
+			aschk.call("... the video waits while it asks", absf(ad.t - t_ask) < 0.01)
+			(dlg.find_child("AdResumeVideo", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			aschk.call("... Resume video: it plays on", ad.find_child("AdCloseDialog", true, false) == null or (ad.find_child("AdCloseDialog", true, false) as Node).is_queued_for_deletion())
+			for k in 140:
+				if ad.granted:
+					break
+				await _wait(0.1)
+			await _wait(0.3)
+			aschk.call("... after 15 seconds of video: Reward granted", ad.granted and pill.text == "Reward granted", pill.text)
+			await _shot(dir, "ads_rewarded_granted")
+			acl.pressed.emit()
+			await _wait(0.3)
+			aschk.call("... closing it now gives the reward", find_ad.call() == null and ares["done"] == 2 and ares["skipped"] == 0)
+			# ---- a package's rewarded video, closed early
+			Ads.show("package", func(): ares["done"] += 1, func(): ares["skipped"] += 1)
+			await _wait(3.5)
+			ad = find_ad.call()
+			(ad.find_child("AdClose", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			(ad.find_child("AdCloseVideo", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			aschk.call("package: Close video ends it without the reward", find_ad.call() == null and ares["done"] == 2 and ares["skipped"] == 1)
+			# ---- Developer tools: a sample of each kind at once, even with samples off
+			Game.settings["ad_sample"] = false
+			Ads.preview("after_match")
+			await _wait(0.5)
+			ad = find_ad.call()
+			aschk.call("Developer tools → Sample advert: between matches shows one with samples off", ad != null and not ad.rewarded)
+			if ad:
+				ad.queue_free()
+			Ads.preview("xp_chest")
+			await _wait(0.5)
+			ad = find_ad.call()
+			aschk.call("Developer tools → Sample advert: XP chest (rewarded) shows one", ad != null and ad.rewarded)
+			if ad:
+				ad.queue_free()
+			# ---- samples off: the plain stand-in, as before
+			Ads.show("after_match", func(): ares["done"] += 1)
+			await _wait(0.5)
+			var plain := false
+			var seen := []
+			for n in Ads.find_children("*", "Label", true, false):
+				seen.append((n as Label).text)
+				if (n as Label).text == "An advert will play here." and not n.is_queued_for_deletion():
+					plain = true
+			aschk.call("samples off: the plain stand-in shows", plain and find_ad.call() == null, str(seen))
+			for c in (Ads.get("_layer") as Node).get_children():
+				c.queue_free()
+			# ---- a store build: never
+			Game.pretend_store = true
+			aschk.call("a store build: no adverts and no samples (adverts off)", not Ads.active() and not Ads.samples())
+			Game.pretend_store = false
+			Game.settings = as_keep
+			print("ADSAMPLE %s %s" % ["PASS" if asbad.is_empty() else "FAIL", str(asbad)])
 		"pkbake":
 			# the baked pictures of the packages and the XP chest (PackageView falls back to them on a phone that can't
 			# draw the 3D picture): 512 px, transparent, from the same camera, at rest
@@ -5099,7 +5289,7 @@ func _tour_step(dir: String, s: String) -> void:
 			for d in [Game.settings, Game.progress]:
 				for k in (d as Dictionary).keys():
 					var ks := str(k)
-					if (ks.begins_with("ad_") or "advert" in ks) and ks != "ad_standins":
+					if (ks.begins_with("ad_") or "advert" in ks) and not (ks in ["ad_standins", "ad_sample"]):     # (developer settings)
 						ad_keys.append(ks)
 			cchk.call("... closing the game here skips that advert: nothing about it is saved", ad_keys.is_empty(), ", ".join(ad_keys))
 			after_results("menu")

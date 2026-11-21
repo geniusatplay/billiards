@@ -7,7 +7,8 @@ extends Control
 ## picture of the same model (assets/icons/packages/, tour step `pkbake`) with the same sway and opening.
 ## The five models (assets/models/packages/pk_1..5.glb) are the designs Randy chose. Since v1.1.8: Pine Crate
 ## (common), Flight Case (uncommon), Emerald Monolith (rare), Pink Neon Flight Case (epic), Ruby Vault (legendary);
-## the XP chest is the orange XP Flight Case (since v1.1.7). (Up to v1.1.6: Pine Crate, Emerald Crate, Flight Case,
+## the XP chest is the orange XP Flight Case (since v1.1.7; v1.1.15: without the latches and the airline tag, and with
+## a big gold "XP" at the bottom middle of the front, Randy 21 Nov). (Up to v1.1.6: Pine Crate, Emerald Crate, Flight Case,
 ## Pink Neon Flight Case, Vortex Vault, and a walnut treasure chest.) They come unpainted; PAINT below gives every material its look with
 ## the same patterns the cues use (see Cues.material).
 
@@ -37,6 +38,7 @@ const PAINT := {
 	# the XP chest: the orange flight case with "XP" on it (x8)
 	"carbon": [22, "141517", "2e3036", 0.3, 0.3], "safety_orange": [0, "ff6a10", "", 0.0, 0.3, 0.12], "chrome2": [0, "e6e6f2", "", 0.5, 0.1],
 	"tyre": [0, "111216", "", 0.0, 0.8], "tag": [0, "f2f4f8", "", 0.0, 0.5], "ink2": [0, "1a1d24", "", 0.0, 0.5],
+	"xp_gold": [0, "ffc23a", "", 0.6, 0.22, 0.16],     # the XP chest's gold letters (v1.1.15)
 }
 const XP_CHEST := "res://assets/models/packages/xp_chest.glb"
 const XP_GOLD := Color("ffc850")     # (the XP chest's colour in the menu and its light, kept since it was gold)

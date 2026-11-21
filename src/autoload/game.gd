@@ -52,7 +52,7 @@ const DEFAULTS := {
 	# unlock_all is ON while the game is being tested (Randy, 11 Nov): every cue, table, ball set and scene can be
 	# used straight away. Switch the default to false before the game goes to the stores.
 	# fps_counter is ON while testing too (Randy, 11 Nov: "add a fps counter"); switch it off before the stores.
-	"show_fps": false, "fps_counter": true, "unlock_all": true, "ad_standins": false,
+	"show_fps": false, "fps_counter": true, "unlock_all": true, "ad_standins": false, "ad_sample": false,
 	# the stick rises over balls instead of passing through them (Randy, 11 Nov: a developer option, on by default)
 	"cue_over_balls": true,
 	# the gear drawer in matches (Randy, 11 Nov: a testing tool, gone mid-game once released; never online)
@@ -154,7 +154,7 @@ func store_player_name(i: int, text: String) -> void:
 
 ## What the developer options are in a store build, whatever was saved (v1.1.15): nothing unlocked for free, no
 ## counters, no gear drawer, no advert stand-ins, no AR scene background or floating table, the camera as designed.
-const RELEASE_VALUES := {"unlock_all": false, "ad_standins": false, "fps_counter": false, "show_fps": false,
+const RELEASE_VALUES := {"unlock_all": false, "ad_standins": false, "ad_sample": false, "fps_counter": false, "show_fps": false,
 	"gear_drawer": false, "ar_background": false, "ar_float": false, "cam_zoom": 1.0, "ar_push": 0.0,
 	"tut_version": -1}
 

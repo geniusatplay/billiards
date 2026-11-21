@@ -12,6 +12,10 @@ extends Node
 ## advert stand-ins" on (developer tools) a stand-in screen appears at each moment instead.
 ## To go live: add the AdMob plugin, put the unit ids below, show the real advert in _show_real() and set
 ## ENABLED = true.
+## v1.1.15 (Randy, 21 Nov: "create an apk version which lets me preview how the ads will look"): the advert-preview
+## build (export feature "adpreview", `tools/build_apk.py --adpreview`) plays sample adverts at each moment, laid out
+## the way real ones are (AdSample: an interstitial, and rewarded videos with the reward countdown); Developer tools →
+## "Stand-ins look like real adverts" does the same in a test build. A store build never has either.
 
 const ENABLED := false
 const APP_ID := ""                                   # AdMob app id (set when the AdMob app exists)
@@ -21,8 +25,22 @@ const REWARDED := ["xp_chest", "package"]
 var _layer: CanvasLayer
 
 
+## The advert-preview build (asked once).
+static var PREVIEW_BUILD := OS.has_feature("adpreview")
+
+
 func active() -> bool:
-	return ENABLED or bool(Game.get_s("ad_standins"))
+	return ENABLED or PREVIEW_BUILD or bool(Game.get_s("ad_standins"))
+
+
+## The stand-ins look like real adverts (AdSample) instead of the plain "An advert will play here." screen.
+func samples() -> bool:
+	return PREVIEW_BUILD or bool(Game.get_s("ad_sample"))
+
+
+## Developer tools: shows a sample advert of one moment now, whatever the settings say.
+func preview(moment: String) -> void:
+	_stand_in(moment, func(): pass, func(): pass, true)
 
 
 ## Shows the advert for a moment, then calls `done`. For a rewarded moment `done` means the reward was earned;
@@ -40,11 +58,22 @@ func _show_real(_moment: String, _done: Callable, _skipped: Callable) -> bool:
 	return false     # no advert plugin is built in yet
 
 
-func _stand_in(moment: String, done: Callable, skipped: Callable) -> void:
+func _stand_in(moment: String, done: Callable, skipped: Callable, sample := false) -> void:
 	if _layer == null:
 		_layer = CanvasLayer.new()
 		_layer.layer = 90
 		add_child(_layer)
+	if sample or samples():
+		var ad := AdSample.new(moment in REWARDED)
+		ad.theme = UIKit.theme()
+		_layer.add_child(ad)
+		ad.finished.connect(func(earned: bool):
+			ad.queue_free()
+			if earned or not (moment in REWARDED):
+				done.call()
+			elif skipped.is_valid():
+				skipped.call())
+		return
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.theme = UIKit.theme()

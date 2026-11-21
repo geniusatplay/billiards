@@ -248,40 +248,74 @@ class MainMenu extends Screen:
 		# the XP chest (hidden at the top level, where XP no longer counts)
 		if Game.level() < XP.MAX_LEVEL:
 			_corner.add_child(_chest_button())
-		# packages
+		# packages: the next crate, "Packages" and how many, and "Ready!" or the time left, laid out like the XP chest
+		# beside it (v1.1.15: "please label what the gift box is on the right side at the menu similarly to the xp
+		# chests display")
 		var q: Array = Game.packages()
 		var pk := Button.new()
 		pk.focus_mode = Control.FOCUS_NONE
-		pk.custom_minimum_size = Vector2(210, 170)
+		pk.custom_minimum_size = Vector2(360, 170)
 		pk.name = "PackagesButton"
 		pk.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		var has := not q.is_empty()
+		var pk_ready := has and Game.packages_ready() > 0
 		var rc := GearScreens.rarity_color(XP.rarity_of_level(int(q[0]))) if has else Color(1, 1, 1, 0.14)
 		for st in ["normal", "hover", "pressed", "focus"]:
 			pk.add_theme_stylebox_override(st, UIKit.box(UIKit.BTN_BLACK, 22, 3 if has else 2, rc, Vector4(0, 0, 0, 0)))
 		if has:
 			var view := PackageView.new(XP.rarity_of_level(int(q[0])), 150.0)
-			view.position = Vector2(8, 10)
+			view.position = Vector2(6, 10)
+			view.set_live(pk_ready)          # still unlocking: the crate keeps still, like the XP chest
 			pk.add_child(view)
-			if Game.packages_ready() == 0:
-				# still unlocking: the crate keeps still and the time it unlocks by itself shows on it
-				view.set_live(false)
-				var wait := UIKit.label(XP.clock(Game.package_left(int(q[0]))), "SmallLabel")
-				wait.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-				wait.position = Vector2(12, 128)
-				wait.name = "PackageWait"
-				pk.add_child(wait)
-			var badge := UIKit.label("×%d" % q.size(), "H3Label")
-			badge.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-			badge.add_theme_color_override("font_color", rc)
-			badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-			badge.position = Vector2(90, 118)
-			badge.size = Vector2(108, 44)
-			pk.add_child(badge)
 		else:
 			var g2 := IconGlyph.make("gift", 84, Color(1, 1, 1, 0.3))
-			g2.position = Vector2(63, 43)
+			g2.position = Vector2(39, 43)
 			pk.add_child(g2)
+		var pcol := UIKit.vbox(2)
+		pcol.position = Vector2(160, 0)
+		pcol.size = Vector2(186, 170)
+		pcol.custom_minimum_size = Vector2(186, 170)
+		pcol.alignment = BoxContainer.ALIGNMENT_CENTER
+		pcol.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var pt := UIKit.label(L.t("Packages"), "H3Label")
+		pt.name = "PackagesTitle"
+		pt.clip_text = true
+		pt.add_theme_color_override("font_color", rc if has else UIKit.TEXT)
+		(func(): _fit_line(pt, 186.0)).call_deferred()       # (once it is in the tree and has its theme)
+		pcol.add_child(pt)
+		var ps: Label
+		if not has:
+			# two short lines at most (the game's labels leave a lot of room between lines; this keeps both in the tile)
+			ps = UIKit.label(L.t("No packages to open"), "SmallLabel")
+			ps.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			ps.max_lines_visible = 2
+			ps.add_theme_constant_override("line_spacing", -16)
+			ps.custom_minimum_size = Vector2(186, 0)
+			ps.name = "PackagesStatus"
+			pcol.add_theme_constant_override("separation", -8)
+			pcol.add_child(ps)
+			(func(): _fit_lines(ps, 2)).call_deferred()
+		else:
+			# "Ready!" or the time left, and how many are waiting
+			var srow := UIKit.hbox(10)
+			srow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			if pk_ready:
+				ps = UIKit.label(L.t("Ready!"), "MutedLabel")
+				ps.add_theme_color_override("font_color", UIKit.TEXT)
+				ps.name = "PackagesStatus"
+			else:
+				ps = UIKit.label(XP.clock(Game.package_left(int(q[0]))), "MutedLabel")
+				ps.name = "PackageWait"
+			ps.clip_text = true
+			ps.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			srow.add_child(ps)
+			var badge := UIKit.label("×%d" % q.size(), "MutedLabel")
+			(func(): _fit_line(ps, 120.0)).call_deferred()       # (the room beside "×99")
+			badge.name = "PackagesCount"
+			badge.add_theme_color_override("font_color", rc)
+			srow.add_child(badge)
+			pcol.add_child(srow)
+		pk.add_child(pcol)
 		pk.pressed.connect(func(): router.call("go", "packages"))
 		_corner.add_child(pk)
 		# the times count down; the corner is rebuilt when the chest or a package becomes ready
@@ -318,22 +352,48 @@ class MainMenu extends Screen:
 		view.set_live(ready)          # it sways when it can be opened, and keeps still while it waits
 		b.add_child(view)
 		var col := UIKit.vbox(2)
-		col.position = Vector2(160, 40)
-		col.custom_minimum_size = Vector2(186, 0)
+		col.position = Vector2(160, 0)
+		col.size = Vector2(186, 170)
+		col.custom_minimum_size = Vector2(186, 170)
+		col.alignment = BoxContainer.ALIGNMENT_CENTER       # (centred, like the packages tile beside it: the titles line up)
 		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var t := UIKit.label(L.t("XP chest"), "H3Label")
+		t.name = "ChestTitle"
 		t.add_theme_color_override("font_color", PackageView.XP_GOLD)
 		t.clip_text = true
+		(func(): _fit_line(t, 186.0)).call_deferred()
 		col.add_child(t)
 		var st := UIKit.label(L.t("Ready!") if ready else XP.clock(Game.chest_left()), "MutedLabel")
 		st.clip_text = true
 		st.name = "ChestTime"
+		if ready:
+			(func(): _fit_line(st, 186.0)).call_deferred()
 		if ready:
 			st.add_theme_color_override("font_color", UIKit.TEXT)
 		col.add_child(st)
 		b.add_child(col)
 		b.pressed.connect(func(): router.call("go", "chest"))
 		return b
+
+	## A one-line label in a corner tile: made smaller (down to `min_px`) when its words are wider than the room, so a
+	## long language still shows the whole word (v1.1.15).
+	## A wrapped label: made smaller (down to `min_px`) until its words take at most `lines` lines.
+	static func _fit_lines(l: Label, lines: int, min_px := 18) -> void:
+		if not is_instance_valid(l) or not l.is_inside_tree():
+			return
+		var px := l.get_theme_font_size("font_size")
+		while l.get_line_count() > lines and px > min_px:
+			px -= 2
+			l.add_theme_font_size_override("font_size", px)
+
+	static func _fit_line(l: Label, room: float, min_px := 22) -> void:
+		if not is_instance_valid(l) or not l.is_inside_tree():
+			return
+		var f := l.get_theme_font("font")
+		var px := l.get_theme_font_size("font_size")
+		var w := f.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, px).x
+		if w > room and w > 0.0:
+			l.add_theme_font_size_override("font_size", maxi(min_px, int(floor(px * room / w))))
 
 	## Languages with long words make the button column wide. It must never run into the game's name on the
 	## left, so when it would, the button text is made smaller until the column fits beside it.
