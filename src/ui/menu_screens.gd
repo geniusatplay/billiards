@@ -98,11 +98,15 @@ class MainMenu extends Screen:
 		var tag := UIKit.label(Game.TITLE_LINES[1], "H3Label")
 		tag.name = "MenuSubtitle"
 		tag.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED      # (part of the name)
+		# (a FontVariation over UIKit's FontVariation loses its weight and drew the Outfit's thinnest: copy the weight)
+		var f700 := UIKit.font(700) as FontVariation
 		var spaced := FontVariation.new()
-		spaced.base_font = UIKit.font(700)
+		spaced.base_font = f700.base_font
+		spaced.variation_opentype = f700.variation_opentype
+		spaced.fallbacks = f700.fallbacks
 		spaced.spacing_glyph = 7
 		tag.add_theme_font_override("font", spaced)
-		tag.add_theme_color_override("font_color", Color(UIKit.TEXT, 0.72))
+		tag.add_theme_color_override("font_color", UIKit.EMERALD)      # (as on the loading screen: the name's second line)
 		left.add_child(tag)
 		left.add_child(UIKit.spacer(false))
 		# level and XP
