@@ -25,6 +25,7 @@ var fill_in := {}
 ## v1.1.15: the tutorial runs as a practice match (src/game/tutorial.gd arranges the table between objectives):
 ## no rack-cleared screen, no stats; the aim guide it asks for; the last stroke for its checks.
 var tutorial := false
+var warmup := false            # the silent match that prepares the shaders while loading: never moves the camera
 var guide_override := -1
 var last_shot := {}
 var _ai_think := 0.0
@@ -79,6 +80,7 @@ var shots_total := 0
 var _rack_shots0 := 0         # Practice: shots_total when this rack started
 var _rack_t0 := 0.0           # Practice: when this rack started (seconds of play)
 var placing_cue := false
+var placed_this_turn := false   # the cue ball was placed this turn ("Place cue ball"): the hand button stops blinking
 var _hand_ring: MeshInstance3D   # glowing ring around the cue ball while it's in hand
 var _kitchen: MeshInstance3D     # the area behind the head string, lit while the cue ball is being placed for the break
 var _hand_t := 0.0
@@ -148,6 +150,7 @@ func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	online = cfg.get("online", false)
 	fill_in = cfg.get("fill_in", {}) if vs_ai else {}
 	tutorial = cfg.has("tutorial")
+	warmup = cfg.get("warmup", false)
 	net = cfg.get("net") as NetMatch
 	if online and net == null:
 		online = false
@@ -188,8 +191,8 @@ func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	if _hand_ring == null:
 		_hand_ring = MeshInstance3D.new()
 		var tm := TorusMesh.new()
-		tm.inner_radius = sim.R * 1.3
-		tm.outer_radius = sim.R * 1.55
+		tm.inner_radius = sim.R * 1.35
+		tm.outer_radius = sim.R * 1.8
 		tm.rings = 48
 		tm.ring_segments = 8
 		_hand_ring.mesh = tm
@@ -351,14 +354,21 @@ func cue_ball_pos() -> Vector2:
 
 
 func _set_state(s: int) -> void:
-	if s == State.BALL_IN_HAND and is_human_turn() and stage.view == Stage.View.AIM:
-		# the aim camera follows the cue ball: moving the ball from it would move the view under the finger, so the
-		# overview while placing, and the aim view again once it is placed (as for a shot: restore_aim_view)
-		stage.set_view(Stage.View.OVERVIEW)
-		stage.set_meta("restore_aim_view", true)
-	elif s == State.AIM and stage.has_meta("restore_aim_view") and state == State.BALL_IN_HAND:
-		stage.remove_meta("restore_aim_view")
-		stage.set_view(Stage.View.AIM)
+	if s == State.BALL_IN_HAND and is_human_turn() and state != State.BALL_IN_HAND and not warmup:
+		if stage.mode == Stage.Mode.STUDIO:
+			# Play in place: the cue ball is placed from the top view, and once it is placed the aim view follows
+			stage.set_view(Stage.View.TOP)
+			stage.set_meta("aim_after_place", true)
+		elif stage.view == Stage.View.AIM:
+			# AR's aim camera follows the cue ball: moving the ball from it would move the view under the finger, so
+			# the overview while placing, and the aim view again once it is placed (as for a shot: restore_aim_view)
+			stage.set_view(Stage.View.OVERVIEW)
+			stage.set_meta("restore_aim_view", true)
+	elif s == State.AIM and state == State.BALL_IN_HAND:
+		for k in ["aim_after_place", "restore_aim_view"]:
+			if stage.has_meta(k):
+				stage.remove_meta(k)
+				stage.set_view(Stage.View.AIM)
 	state = s
 	FpsCounter.phase = "match " + str(State.keys()[s]).to_lower()
 	if control:
@@ -371,6 +381,12 @@ func _set_state(s: int) -> void:
 func _start_turn(first := false) -> void:
 	var info := {"first": first, "ball_in_hand": rules.ball_in_hand and mode == "versus",
 		"changed": current != _last_turn_player, "group": rules.groups[current]}
+	# Play in place: the break starts with placing the cue ball, from the top view, with a ring round it and a
+	# "Place cue ball" button (Randy, 22 Nov: "please have a yellow circle around the actual cue ball pulsating and a
+	# button saying Place Cue Ball so people know they need to place the cue ball from the top view... when they
+	# place it, it automatically switches to the target aimer view (this is the non ar mode of course)")
+	info["place_first"] = info["ball_in_hand"] or (_break_pending and stage.mode == Stage.Mode.STUDIO and not tutorial and not warmup)
+	placed_this_turn = false
 	if sim.st[cue_index()] == PoolSim.ST_POCKETED:
 		_respawn_cue(Rack.break_spot(sim))
 	control.reset_for_turn(_default_aim())
@@ -382,7 +398,7 @@ func _start_turn(first := false) -> void:
 	turn_started.emit(current, info)
 	if online and is_human_turn():
 		_reset_aim_stream()
-	if info["ball_in_hand"] and is_human_turn():
+	if info["place_first"] and is_human_turn():
 		placing_cue = true
 		_set_state(State.BALL_IN_HAND)
 	elif is_human_turn():
@@ -509,9 +525,11 @@ func _process(delta: float) -> void:
 	if in_hand:
 		_hand_t += delta
 		var cp := cue_ball_pos()
-		var k := 1.0 + 0.07 * sin(_hand_t * 5.0)
+		var pulse := 0.5 + 0.5 * sin(_hand_t * 5.0)
+		var k := 1.0 + 0.16 * pulse
 		_hand_ring.position = Vector3(cp.x, 0.004, cp.y)
 		_hand_ring.scale = Vector3(k, 0.12, k)
+		(_hand_ring.material_override as StandardMaterial3D).albedo_color = Color(1.0, 0.82, 0.25, 0.55 + 0.45 * (1.0 - pulse))
 		cue_view.visible = false
 	stage.set_focus(cue_ball_pos(), control.yaw if control else 0.0)
 
@@ -1047,6 +1065,7 @@ func confirm_cue_placement() -> void:
 	if state != State.BALL_IN_HAND:
 		return
 	placing_cue = false
+	placed_this_turn = true
 	if online:
 		net.send("place", {"p": cue_ball_pos()})
 	control.reset_for_turn(_default_aim())

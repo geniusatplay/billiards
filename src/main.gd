@@ -425,6 +425,9 @@ func start_match(cfg: Dictionary) -> void:
 	# for play in place... this is the play in place aiming mode")
 	if stage.mode == Stage.Mode.STUDIO:
 		stage.set_view(Stage.View.AIM)
+	for k in ["aim_after_place", "restore_aim_view"]:
+		if stage.has_meta(k):
+			stage.remove_meta(k)       # (left by a match that ended while placing or rolling)
 	stage.new_match_scene()   # (only shows with "Scene background in AR" on, once the table is placed)
 	Sfx.music_context(true)
 	game = PoolGame.new()
@@ -436,6 +439,23 @@ func start_match(cfg: Dictionary) -> void:
 	hud_setup(cfg)
 	if cfg.has("tutorial"):
 		hud.add_child(Tutorial.new(self, int(cfg["tutorial"])))
+	if _tour_dir != "" and _tour_autoplace:
+		_tour_place_first.call_deferred(game)
+
+
+## Tours: Play in place starts the break by placing the cue ball (22 Nov). Steps about other things go on as a
+## player does after it: "Place cue ball" where the ball starts. (The steps about placing see it themselves.)
+var _tour_autoplace := true
+
+
+func _tour_place_first(g: PoolGame) -> void:
+	for k in 30:
+		await get_tree().process_frame
+		if not is_instance_valid(g) or g != game:
+			return
+		if g.state == PoolGame.State.BALL_IN_HAND and g.is_human_turn() and g.break_pending():
+			g.confirm_cue_placement()
+			return
 
 
 func hud_setup(cfg: Dictionary) -> void:
@@ -568,8 +588,12 @@ func switch_view(to: String) -> void:
 		return
 	if want == stage.mode:
 		return
+	if want != Stage.Mode.STUDIO and game.state == PoolGame.State.BALL_IN_HAND and game.break_pending() and not game.rules.ball_in_hand:
+		# Play in place's break starts by placing the cue ball; AR aims the break straight away: the ball stays put
+		game.confirm_cue_placement()
 	stage.switch_mode(want)
 	if want != Stage.Mode.STUDIO:
+		stage.set_view(Stage.View.OVERVIEW)    # (the camera's own view)
 		resume()
 	else:
 		stage.set_view(Stage.View.AIM)      # (Play in place's own view)
@@ -1692,6 +1716,8 @@ func _run_tour(dir: String) -> void:
 		if only == "" and s in ["perf", "ios_check", "store", "breakview", "pkbake"]:
 			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator)
 		Game.world_ready = "studio" if s != "world" else ""   # (v1.1.15: the world is chosen; the "world" step tests choosing it)
+		# (the steps about placing the cue ball see Play in place's placing start for themselves)
+		_tour_autoplace = not (s in ["breakpos", "inplace", "hand", "lang", "tutorial", "tut_lang", "world", "lang_name"])
 		await _tour_step(dir, s)
 	print("TOUR done")
 	get_tree().quit()
@@ -2417,19 +2443,26 @@ func _tour_step(dir: String, s: String) -> void:
 			Game.set_s("scene", "reef")
 			start_match({"mode": "versus", "vs_ai": true, "ai_level": 0})
 			await _wait(1.6)
-			ipc.call("a new match in Play in place starts in the aim view", stage.view == Stage.View.AIM and (hud.get("_btn_views")[1] as Button).modulate.a > 0.95)
+			ipc.call("a new match in Play in place: the break is placed first, from the top view (then the aim view, below)", stage.view == Stage.View.TOP and game.state == PoolGame.State.BALL_IN_HAND and (hud.get("_btn_views")[2] as Button).modulate.a > 0.95)
 			ipc.call("... in the Choose Gear scene (Coral Deep)", str(stage.get("_scene").get("id", "")) == "reef", str(stage.get("_scene").get("id", "")))
 			ipc.call("... the cue ball starts behind the head string", game.cue_ball_pos().x < Rack.head_spot(game.sim).x)
-			ipc.call("... ball in hand for the break: the hand button blinks", hud.hand_blinking() and (hud.get("_hand_ring") as Control).visible)
-			await _wait(0.2)
+			ipc.call("... the break starts by placing it: the top view, a ring round it, 'Place cue ball'", game.state == PoolGame.State.BALL_IN_HAND and stage.view == Stage.View.TOP and (game.get("_hand_ring") as Node3D).visible and (hud.get("_hand_place") as Control).visible)
+			await _wait(0.6)
 			await _shot(dir, "inplace_start")
-			game.start_ball_in_hand()
-			await _wait(0.5)
-			ipc.call("placing from the aim view: the overview while the ball is moved", stage.view == Stage.View.OVERVIEW and not hud.hand_blinking())
 			game.move_cue_ball(Rack.break_spot(game.sim) + Vector2(-0.1, 0.15))
 			game.confirm_cue_placement()
 			await _wait(0.4)
-			ipc.call("... and the aim view again once it is placed", stage.view == Stage.View.AIM)
+			ipc.call("'Place cue ball' -> the aim view", stage.view == Stage.View.AIM and game.state == PoolGame.State.AIM)
+			ipc.call("... and no blinking (it has been placed)", not hud.hand_blinking())
+			await _wait(0.6)
+			await _shot(dir, "inplace_aim")
+			# the hand button: placing again from the aim view (the top view while it is moved), then the aim view
+			game.start_ball_in_hand()
+			await _wait(0.4)
+			ipc.call("the hand button again -> placing from the top view", game.state == PoolGame.State.BALL_IN_HAND and stage.view == Stage.View.TOP)
+			game.confirm_cue_placement()
+			await _wait(0.4)
+			ipc.call("... and back to the aim view", stage.view == Stage.View.AIM)
 			(hud.get("_btn_views")[2] as Button).pressed.emit()
 			await _wait(0.8)
 			await _shot(dir, "inplace_top")
@@ -2969,7 +3002,8 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(1.6)
 			var R: float = game.sim.R
 			var place_btn: Button = hud.get("_hand_place")
-			game.start_ball_in_hand()
+			if game.state != PoolGame.State.BALL_IN_HAND:      # (Play in place starts the break by placing it, 22 Nov)
+				game.start_ball_in_hand()
 			await _wait(0.2)
 			res.append(["hand button -> placing, Place button shown", game.state == PoolGame.State.BALL_IN_HAND and place_btn.visible])
 			var pa := Vector2(-0.6, 0.2)
@@ -3491,7 +3525,8 @@ func _tour_step(dir: String, s: String) -> void:
 					problems += _audit_text(code, "versus_banner")
 					await _shot(dir, "lang_%s_versus_banner" % code)
 					await _wait(1.8)
-					game.start_ball_in_hand()
+					if game.state != PoolGame.State.BALL_IN_HAND:
+						game.start_ball_in_hand()
 					await _wait(0.4)
 					problems += _audit_text(code, "break_place")
 					await _shot(dir, "lang_%s_break_place" % code)
@@ -3503,7 +3538,8 @@ func _tour_step(dir: String, s: String) -> void:
 					await _wait(1.6)
 					problems += _audit_text(code, "practice_" + scheme)
 					await _shot(dir, "lang_%s_practice_%s" % [code, scheme])
-				game.start_ball_in_hand()
+				if game.state != PoolGame.State.BALL_IN_HAND:
+					game.start_ball_in_hand()
 				await _wait(0.4)
 				problems += _audit_text(code, "ball_in_hand")
 				await _shot(dir, "lang_%s_hand" % code)
@@ -3513,7 +3549,8 @@ func _tour_step(dir: String, s: String) -> void:
 				problems += _audit_text(code, "versus_banner")
 				await _shot(dir, "lang_%s_versus_banner" % code)
 				await _wait(1.8)
-				game.start_ball_in_hand()   # the break: the cue ball may be moved behind the line
+				if game.state != PoolGame.State.BALL_IN_HAND:
+					game.start_ball_in_hand()   # the break: the cue ball may be moved behind the line
 				await _wait(0.4)
 				problems += _audit_text(code, "break_place")
 				await _shot(dir, "lang_%s_break_place" % code)
@@ -3840,15 +3877,20 @@ func _tour_step(dir: String, s: String) -> void:
 			start_match({"mode": "versus", "vs_ai": false})
 			await _wait(3.2)
 			var head_x: float = Rack.head_spot(game.sim).x
-			bp.call("the hand button is offered before the break", (hud.get("_btn_hand") as Control).visible)
-			# 22 Nov (Randy: "make sure their starting ball placement is a legal starting placement"; "when there is
-			# a ball in hand available, make the icons edge blink yellow")
+			# 22 Nov (Randy: "make sure their starting ball placement is a legal starting placement"; Play in place:
+			# "please have a yellow circle around the actual cue ball pulsating and a button saying Place Cue Ball ...
+			# from the top view... when they place it, it automatically switches to the target aimer view")
 			bp.call("the cue ball starts behind the head string, not on it", game.cue_ball_pos().x < head_x - game.sim.R and game.cue_ball_pos().distance_to(Rack.break_spot(game.sim)) < 0.0001, str(game.cue_ball_pos()))
-			bp.call("... and the hand button's edge blinks yellow", hud.hand_blinking())
+			var hp: Button = hud.get("_hand_place")
+			bp.call("Play in place: the break starts by placing the cue ball, from the top view", game.state == PoolGame.State.BALL_IN_HAND and stage.view == Stage.View.TOP)
+			bp.call("... a 'Place cue ball' button", hp.visible and hp.text == "Place cue ball")
+			bp.call("... and a ring round the cue ball", (game.get("_hand_ring") as Node3D).visible)
+			bp.call("... no blinking while it is placed", not hud.hand_blinking())
 			await _shot(dir, "break_aim")
-			game.start_ball_in_hand()
+			if game.state != PoolGame.State.BALL_IN_HAND:
+				game.start_ball_in_hand()
 			await _wait(0.5)
-			bp.call("hand button -> the cue ball can be moved", game.state == PoolGame.State.BALL_IN_HAND)
+			bp.call("the cue ball can be moved", game.state == PoolGame.State.BALL_IN_HAND)
 			game.move_cue_ball(Vector2(0.5, 0.2))
 			bp.call("dragged past the line -> stops just behind it", game.cue_ball_pos().x < head_x and absf(game.cue_ball_pos().x - head_x) < 0.002 and absf(game.cue_ball_pos().y - 0.2) < 0.001, str(game.cue_ball_pos()))
 			bp.call("... placing: no blinking", not hud.hand_blinking())
@@ -3860,7 +3902,9 @@ func _tour_step(dir: String, s: String) -> void:
 			await _shot(dir, "break_place")
 			game.confirm_cue_placement()
 			await _wait(0.3)
-			bp.call("Place ball -> aiming, the ball stays put", game.state == PoolGame.State.AIM and game.cue_ball_pos().distance_to(Vector2(head_x - 0.25, -0.22)) < 0.001)
+			bp.call("Place cue ball -> aiming, the ball stays put", game.state == PoolGame.State.AIM and game.cue_ball_pos().distance_to(Vector2(head_x - 0.25, -0.22)) < 0.001)
+			bp.call("... in the aim view (the target)", stage.view == Stage.View.AIM)
+			bp.call("... and the hand button does not blink (placed already)", not hud.hand_blinking())
 			game.fire(0.0, 1.0, Vector2.ZERO, 0.0)
 			var v1: float = game.sim.vel[game.cue_index()].length()
 			bp.call("the break at full power leaves at twice the usual top speed", v1 > 1.9 * game.sim.max_speed and v1 < 2.001 * game.sim.max_speed, "%.1f m/s (a little is lost when the cue has to be raised over the rail)" % v1)
@@ -3880,7 +3924,9 @@ func _tour_step(dir: String, s: String) -> void:
 			# practice: the first shot is a break too (same speed), the cue ball may go anywhere
 			start_match({"mode": "practice"})
 			await _wait(1.5)
-			game.start_ball_in_hand()
+			bp.call("practice in Play in place: the first break starts by placing too", game.state == PoolGame.State.BALL_IN_HAND)
+			if game.state != PoolGame.State.BALL_IN_HAND:
+				game.start_ball_in_hand()
 			game.move_cue_ball(Vector2(0.0, 0.3))
 			bp.call("practice: the cue ball may be placed anywhere", game.cue_ball_pos().distance_to(Vector2(0.0, 0.3)) < 0.001)
 			game.confirm_cue_placement()
@@ -5269,6 +5315,9 @@ func _tour_step(dir: String, s: String) -> void:
 			Game.set_s("control_scheme", "ghost_target")
 			start_match({"mode": "practice"})
 			await _wait(1.4)
+			if game.state == PoolGame.State.BALL_IN_HAND:
+				game.confirm_cue_placement()      # (Play in place starts the break by placing the cue ball, 22 Nov)
+				await _wait(0.3)
 			var gs: PoolSim = game.sim
 			var ci: int = game.cue_index()
 			# the cue ball in the open; one ball 13 cm behind it on the line the stick lies along now, the rest far off

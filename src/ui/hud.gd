@@ -237,7 +237,7 @@ func _build() -> void:
 	_build_ar_panel()
 	_build_adjust_panel()
 	# ball in hand: the cue ball can be moved as often as you like; this makes it final
-	_hand_place = UIKit.button("Place ball", "PrimaryButton", "check", 340)
+	_hand_place = UIKit.button("Place cue ball", "PrimaryButton", "check", 340)
 	_hand_place.pressed.connect(func(): game.confirm_cue_placement())
 	_hand_place.visible = false
 	add_child(_hand_place)
@@ -517,6 +517,8 @@ func hand_blinking() -> bool:
 		return false
 	if game.state != PoolGame.State.AIM or not game.is_human_turn():
 		return false
+	if game.placed_this_turn:
+		return false      # (placed already this turn: it may still be moved, but nothing is waiting)
 	return game.break_pending() or (game.mode == "versus" and game.rules.ball_in_hand)
 
 
@@ -533,7 +535,7 @@ func _refresh_tools() -> void:
 		_drawer.close()
 	if _fl_panel and _btn_free:
 		_btn_free.modulate = Color(1, 1, 1, 1) if stage.free_look else Color(1, 1, 1, 0.75)
-		_fl_panel.visible = stage.view == Stage.View.TOP
+		_fl_panel.visible = stage.view == Stage.View.TOP and game.state != PoolGame.State.BALL_IN_HAND   # (not while placing)
 		var fl_grid := _fl_panel.get_child(0) as Control
 		for n in fl_grid.get_children():
 			(n as Control).visible = n == _btn_free or stage.free_look
@@ -585,7 +587,9 @@ func _show_banner_for(d: Dictionary) -> void:
 	var sub := ""
 	if inf.get("ball_in_hand", false):
 		# the how-to only for the player holding the phone; the CPU / the other player simply has ball in hand
-		sub = "Ball in hand — move the cue ball, then tap Place ball" if you else "Ball in hand"
+		sub = "Ball in hand — move the cue ball, then tap Place cue ball" if you else "Ball in hand"
+	elif game.break_pending() and you and inf.get("place_first", false):
+		sub = "Break: move the cue ball anywhere behind the line, then tap Place cue ball" if game.mode == "versus" else "Ball in hand: tap or drag to move the cue ball as often as you like, then tap Place cue ball"
 	elif game.break_pending() and you:
 		sub = "Break shot · the hand button moves the cue ball behind the line"
 	elif game.rules and game.rules.groups[p] >= 0:
@@ -825,9 +829,9 @@ func _update_hint() -> void:
 				"ghost_target": t = "Place the ghost ball · micro pad for fine moves · pull the piston"
 				"thumbstick": t = "Tap table to aim · push the stick to turn · pull the piston"
 		PoolGame.State.BALL_IN_HAND:
-			t = "Ball in hand: tap or drag to move the cue ball as often as you like, then tap Place ball"
+			t = "Ball in hand: tap or drag to move the cue ball as often as you like, then tap Place cue ball"
 			if game.break_placement():
-				t = "Break: move the cue ball anywhere behind the line, then tap Place ball"
+				t = "Break: move the cue ball anywhere behind the line, then tap Place cue ball"
 		PoolGame.State.ROLLING:
 			t = "Tap to fast-forward"
 		PoolGame.State.AI_THINK:

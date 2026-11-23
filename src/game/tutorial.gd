@@ -28,7 +28,7 @@ const TEXT := {
 	"pot": ["Pot the yellow ball", "Send the yellow ball into the far pocket.", "Now pot it into the far pocket."],
 	"cut": ["Pot a ball at an angle", "Hit the yellow ball on its side to send it into the corner pocket.", "Angles next: clip it into the corner."],
 	"draw": ["Pot it with backspin", "Drag the dot on the white ball (bottom left) down, then shoot: the white ball comes back.", "Hit low on the white ball and it comes back."],
-	"hand": ["Ball in hand", "After a foul you get ball in hand: drag the white ball to a clear spot, then tap Place ball.", "My foul! Ball in hand: drag the white ball anywhere, then tap Place ball."],
+	"hand": ["Ball in hand", "After a foul you get ball in hand: drag the white ball to a clear spot, then tap Place cue ball.", "My foul! Ball in hand: drag the white ball anywhere, then tap Place cue ball."],
 	"hand2": ["Ball in hand", "Now pot the yellow ball from there.", "Now pot the yellow one from there."],
 	"hand2_8": ["Sink the 8-ball", "The black 8 is always the last ball. Pot it from there to finish.", "Now the 8 from there. Sink it to win!"],
 	"eight": ["Sink the 8-ball", "The black 8 is always the last ball. Pot it to finish.", "Last ball: the 8. Sink it to win!"],
