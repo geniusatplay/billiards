@@ -204,9 +204,10 @@ func _cover_and_warm() -> void:
 	tw.tween_callback(layer.queue_free)
 
 
-## The loading screen (v1.1.15: the animated one Randy picks, LoadingScreen.STYLE_NAMES; "Emerald Vortex Games",
-## "Emerald Break" and "AR Pool Game"), above everything else, with how far loading has got.
-const LOADING_STYLE := 0
+## The loading screen (v1.1.15: the animated one Randy picks, LoadingScreen.STYLE_NAMES; "Emerald Vortex Games" and
+## the name, "Emerald Online" / "8 Ball Pool AR"), above everything else, with how far loading has got. Randy, 22 Nov: "could we
+## do d with the balls breaking on the table?" -> D, AR scan, with a break on the table.
+const LOADING_STYLE := 3
 var _boot_ls: LoadingScreen
 
 
@@ -342,8 +343,8 @@ func play(target: String) -> void:
 	_open_play(target, false)
 
 
-## The tutorial version Randy picks (Tutorial.VERSIONS).
-const TUTORIAL_VERSION := 0
+## The tutorial version Randy picks (Tutorial.VERSIONS). Randy, 22 Nov: "tutorial E" -> 4, the mini match with a coach.
+const TUTORIAL_VERSION := 4
 
 
 ## Testing builds: Debug → Tutorial can play any of the five versions (the store build always plays the one picked).
@@ -757,7 +758,7 @@ func _notification(what: int) -> void:
 
 # ================================================================== automated screenshot tour (QA)
 ## Looks at every visible Label / Button: English left in a non-Latin language, or text wider than its box.
-const _AUDIT_OK := ["AR", "AI", "IA", "KI", "Emerald Break", "EMERALD VORTEX GAMES", "Play", "Google", "ARCore", "Apple", "ARKit", "Store", "Outfit", "Noto Sans",
+const _AUDIT_OK := ["AR", "AI", "IA", "KI", "Emerald Online 8 Ball Pool AR", "Emerald 8 Ball Pool", "EMERALD ONLINE", "8 BALL POOL AR", "8 Ball Pool", "EMERALD VORTEX GAMES", "Play", "Google", "ARCore", "Apple", "ARKit", "Store", "Outfit", "Noto Sans",
 	"SIL Open Font License", "Pool And Billiards SFX", "Suraj Kispotta", "CC0", "Emerald Vortex Games LLC", "cm", "Services for", "Emerald", "Classic",
 	"Obsidian Gold", "Neon Pulse", "Vortex Spiral", "Midnight Blue", "Crimson Club", "Vortex Violet", "Graphite", "Lounge", "Neon Night", "Sunset Deck", "Desert Dusk", "Firefly Grove", "Aurora Lake", "Coral Deep", "Neon Skyline", "Sky Temple", "Crystal Cavern", "Magma Forge", "Synth Horizon", "Orbit Station",
 	"Aurora", "Player", "English", "Español", "Français", "Deutsch", "Português", "Italiano", "8-ball", "8-BALL", "Pro", "CPU", "online", "Online", "ONLINE", "Nederlands", "Svenska", "Polski", "Čeština", "Română", "Türkçe", "Bahasa Indonesia", "Bahasa Melayu", "Tiếng Việt", "fps", "EMERALD BREAK", "tap", "for developer tools", "AR POOL GAME", "Google Play", "App Store", "AR Pool Game"]
@@ -784,11 +785,11 @@ func cbtn_text_on(root: Node, text: String) -> bool:
 	return false
 
 
-func _audit_text(code: String, where: String) -> int:
+func _audit_text(code: String, where: String, root: Node = null) -> int:
 	var bad := 0
 	var latin := RegEx.create_from_string("[A-Za-z]{3,}")
 	var vp := get_viewport().get_visible_rect()
-	for n in ui_root.find_children("*", "Control", true, false):
+	for n in (root if root else ui_root).find_children("*", "Control", true, false):
 		var c := n as Control
 		if not c.is_visible_in_tree() or not (c is Label or c is Button):
 			continue
@@ -1582,10 +1583,11 @@ func _store_one(dir: String, id: String, lay_a: Dictionary, lay_b: Dictionary) -
 			# the tutorial: an objective on the table, the ball it's about ringed in gold
 			_end_match()
 			_store_gear("lounge", "emerald", "cue_emerald_classic", "balls")
-			start_match({"mode": "practice", "tutorial": 0})
+			start_match({"mode": "practice", "tutorial": TUTORIAL_VERSION})
 			await _wait(1.5)
 			var tut: Tutorial = hud.get_node_or_null("Tutorial")
-			tut.step = 2
+			# (22 Nov: the game's tutorial is the mini match with a coach: its last objective, the 8, ringed in gold)
+			tut.step = maxi(0, (Tutorial.VERSIONS[TUTORIAL_VERSION]["steps"] as Array).find("eight"))
 			tut.phase = 0
 			tut.call("_begin_step")
 			await _wait(2.5)
@@ -1677,7 +1679,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -2374,6 +2376,71 @@ func _tour_step(dir: String, s: String) -> void:
 				all_ok = all_ok and r[1]
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("SHARE %s" % ("PASS" if all_ok else "FAIL"))
+		"lang_name":
+			# the new name (Randy, 22 Nov: "Emerald Online 8 Ball Pool AR", "Emerald 8 Ball Pool" under the icon; "make
+			# sure to update the languages too") in every language: the menu's title, the share popup, "Update needed",
+			# and the AR panels that name the app (camera refused; Google Play Services for AR to install)
+			var langs := Loc.codes()
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--langs="):
+					langs = Array(arg.substr(8).split(","))
+			var problems := 0
+			var named := 0
+			var keep_ar: String = Game.get_s("ar_mode")
+			_end_match()
+			for code in langs:
+				Loc.set_language(code)
+				_stack.clear()
+				Game.world_ready = ""
+				go("menu")
+				await _wait(0.5)
+				var tl: Label = _screen.find_child("MenuSubtitle", true, false)
+				if tl and tl.text == Game.TITLE_LINES[1]:
+					named += 1
+				problems += _audit_text(code, "menu")
+				await _shot(dir, "name_%s_menu" % code)
+				open_share()
+				await _wait(0.6)
+				var sp: Control = overlay_host.get_node_or_null("SharePopup")
+				if sp:
+					problems += _audit_text(code, "share")
+					await _shot(dir, "name_%s_share" % code)
+					if L.t("Share Emerald 8 Ball Pool").contains("Emerald 8 Ball Pool") and StoreScreens.SharePopup.share_text().contains(Game.TITLE):
+						named += 1
+					(sp.find_child("ShareClose", true, false) as Button).pressed.emit()
+					await _wait(0.4)
+				var us := StoreScreens.UpdateScreen.new()
+				add_child(us)
+				await _wait(0.5)
+				problems += _audit_text(code, "update", us)
+				await _shot(dir, "name_%s_update" % code)
+				us.queue_free()
+				Game.set_s("ar_mode", "auto")
+				stage.arcore.simulate = true
+				stage.arcore.sim_path = func(_t: float) -> Transform3D:
+					return Transform3D(Basis.looking_at(Vector3(0, -0.6, -1.0), Vector3.UP), Vector3(0, 1.4, 0))
+				stage.arcore.sim_availability = "installed"
+				stage.arcore.sim_fail = "SecurityException: camera permission denied (allow the camera for Emerald 8 Ball Pool in Settings)"
+				start_match({"mode": "practice"})
+				await _wait(1.2)
+				if stage.ar_block == "permission" and L.t(stage.ar_block_text()).contains("Emerald 8 Ball Pool"):
+					named += 1
+				problems += _audit_text(code, "ar_permission")
+				await _shot(dir, "name_%s_ar_permission" % code)
+				stage.arcore.sim_fail = ""
+				stage.arcore.sim_availability = "not_installed"
+				start_match({"mode": "practice"})
+				await _wait(1.0)
+				problems += _audit_text(code, "ar_install")
+				await _shot(dir, "name_%s_ar_install" % code)
+				_end_match()
+				stage.arcore.simulate = false
+				Game.set_s("ar_mode", keep_ar)
+			Loc.set_language("en")
+			_stack.clear()
+			go("menu")
+			var want := langs.size() * 3
+			print("LANGNAME %s: %d problems, the name in %d of %d places" % ["PASS" if problems == 0 and named == want else "FAIL", problems, named, want])
 		"update":
 			# v1.1.15: the server's version file says this version is too old -> only "Update needed" (opens the store)
 			var res := []
@@ -2605,7 +2672,7 @@ func _tour_step(dir: String, s: String) -> void:
 						problems += _audit_text(code, "tutorial v%d %s" % [v, tut.current()])
 						if code in ["de", "ta", "ar", "ja"] and v == 0 and tut.current() == "draw":
 							await _shot(dir, "tut_lang_%s_draw" % code)
-						if code in ["de", "ru"] and v == 4 and tut.current() == "hand":
+						if code in ["de", "ru"] and v == 4 and tut.current() == "eight":
 							await _shot(dir, "tut_lang_%s_coach" % code)
 					if v == 1:
 						tut.call("_complete")
@@ -2757,7 +2824,7 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(0.5)
 			res.append(["iPhone asking for the camera -> AR waits past the 25 s start limit", stage.ar_state == Stage.ArState.STARTING and stage.arcore.asking_permission])
 			stage.arcore.sim_asking = false
-			stage.arcore.sim_fail = "SecurityException: camera permission denied (allow the camera for Emerald Break in Settings)"
+			stage.arcore.sim_fail = "SecurityException: camera permission denied (allow the camera for Emerald 8 Ball Pool in Settings)"
 			await _wait(0.8)
 			var sett: Button = hud.get("_ar_settings")
 			res.append(["iPhone, camera refused -> blocked 'permission' + app settings button", stage.ar_state == Stage.ArState.BLOCKED and stage.ar_block == "permission" and sett.visible and not (hud.get("_ar_install") as Button).visible])
@@ -4070,6 +4137,47 @@ func _tour_step(dir: String, s: String) -> void:
 			Game.pretend_store = false
 			Game.settings = as_keep
 			print("ADSAMPLE %s %s" % ["PASS" if asbad.is_empty() else "FAIL", str(asbad)])
+		"loadvideo":
+			# The loading screen's moving picture (Randy, 22 Nov: "could you do the loading page with the actual galaxy
+			# table and emerald vortex cue"): the real Galaxy table and Emerald Vortex cue break a rack, drawn by the
+			# game on a see-through background; tools/make_loading_video.py lays it over the AR-scan floor and makes
+			# the looping video. Record: --write-movie <dir>/f.png --fixed-fps 30 (prints the first and last frame).
+			# --lvcam=yaw(radians),dist,pitch(degrees)[,target y[,target x,target z]] frames it; --lvstill takes one
+			# picture only (for framing, and the app icon's table: tools/make_app_icon.py).
+			var lv := [0.0, 2.6, 28.0, 0.2, 0.0, 0.0]
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--lvcam="):
+					var parts := a.substr(8).split(",")
+					for pi_lv in mini(parts.size(), 6):
+						lv[pi_lv] = float(parts[pi_lv])
+			_store_gear("orbit", "galaxy", "cue_vortex", "balls")
+			Game.set_s("ar_mode", "studio")
+			_end_match()
+			start_match({"mode": "practice"})
+			await _wait(1.2)
+			hud.visible = false
+			get_viewport().transparent_bg = true
+			stage.env.background_mode = Environment.BG_CLEAR_COLOR
+			for nm in ["_dome", "_fx", "_floor", "_floor_far", "_shadow_catcher", "_blob"]:
+				var nd = stage.get(nm)
+				if nd is Node3D:
+					(nd as Node3D).visible = false
+			_store_cam(Vector3(float(lv[4]), float(lv[3]), float(lv[5])), float(lv[1]), float(lv[2]), float(lv[0]))
+			await _wait(0.8)
+			if "--lvstill" in OS.get_cmdline_user_args():
+				await _shot(dir, "loadvideo_still")
+				get_tree().quit()
+				return
+			print("LOADVIDEO start %d" % Engine.get_frames_drawn())
+			await _wait(0.6)
+			await _human_shot(0.0, 0.95, Vector2.ZERO, true)
+			var t_lv := 0.0
+			while game.state != PoolGame.State.AIM and t_lv < 14.0:
+				await _wait(0.2)
+				t_lv += 0.2
+			await _wait(0.8)
+			print("LOADVIDEO end %d" % Engine.get_frames_drawn())
+			get_tree().quit()
 		"pkbake":
 			# the baked pictures of the packages and the XP chest (PackageView falls back to them on a phone that can't
 			# draw the 3D picture): 512 px, transparent, from the same camera, at rest
@@ -5227,6 +5335,38 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(0.5)
 			cchk.call("... watched: 4 hours sooner, ready 2 hours after it was opened (about 1 hour left), no second offer",
 				int(Game.progress["chest_at"]) == int(Game.progress["chest_from"]) + XP.CHEST_WAIT_AD and Game.chest_left() > 0 and not (_screen.find_child("ChestAdButton", true, false) as Control).visible, XP.clock(Game.chest_left()))
+			# the advert that opens it at once (2 hours after the last opening have passed): afterwards "Open XP chest",
+			# and the player opens it and sees it open (Randy, 22 Nov)
+			var keep_ch := [Game.progress.get("chest_at"), Game.progress.get("chest_from"), Game.progress.get("chest_cut")]
+			Game.progress["chest_from"] = Game.now() - XP.CHEST_WAIT_AD - 120
+			Game.progress["chest_at"] = int(Game.progress["chest_from"]) + XP.CHEST_WAIT
+			Game.progress["chest_cut"] = false
+			_screen.call("_refresh")
+			await _wait(0.3)
+			cchk.call("2 hours after opening: the button says 'Watch an ad to open it now'", adb.visible and adb.text == L.t("Watch an ad to open it now"), adb.text)
+			var xp_before := Game.xp()
+			_screen.call("_watch")
+			await ad_continue.call()
+			await _wait(0.6)
+			var och: Button = _screen.find_child("OpenChest", true, false)
+			cchk.call("... watched: 'Open XP chest' offered, the chest not opened by itself (no XP yet)", och.visible and not och.disabled and Game.chest_ready() and Game.xp() == xp_before and not adb.visible)
+			await _shot(dir, "ch_chest_after_ad")
+			och.pressed.emit()
+			await _wait(1.2)
+			await _shot(dir, "ch_chest_opening")
+			await _wait(1.6)
+			var xr: Node = null
+			for n in _screen.find_children("*", "", true, false):
+				if n is RewardScreens.XpReveal:
+					xr = n
+			cchk.call("... Open XP chest: the opening, then the XP", xr != null and Game.xp() > xp_before)
+			if xr:
+				xr.closed.emit()
+				xr.queue_free()
+			await _wait(0.4)
+			Game.progress["chest_at"] = keep_ch[0]
+			Game.progress["chest_from"] = keep_ch[1]
+			Game.progress["chest_cut"] = keep_ch[2]
 			back()
 			await _wait(0.8)
 			var ct2: Label = _screen.find_child("ChestTime", true, false)
@@ -5243,12 +5383,27 @@ func _tour_step(dir: String, s: String) -> void:
 			await _shot(dir, "ch_packages_waiting")
 			_screen.call("_open", false, true)
 			await ad_continue.call()
-			await _wait(1.8)
+			await _wait(0.8)
+			# (Randy, 22 Nov: after the advert the button says Open and the player sees it open)
+			var ob: Button = cbtn.call(_screen, L.t("Open package"))
+			var early := false
+			for n in _screen.find_children("*", "", true, false):
+				if n is RewardScreens.Reveal:
+					early = true
+			cchk.call("... after the advert it is unlocked: 'Open package' offered, not opened by itself, no advert button",
+				ob != null and ob.visible and not ob.disabled and not early and Game.packages() == [10] and Game.packages_ready() == 1
+				and not (_screen.find_child("PackageAdButton", true, false) as Control).visible)
+			await _shot(dir, "ch_packages_after_ad")
+			if ob:
+				ob.pressed.emit()
+			await _wait(1.0)
+			await _shot(dir, "ch_packages_opening")
+			await _wait(1.4)
 			var prev: Node = null
 			for n in _screen.find_children("*", "", true, false):
 				if n is RewardScreens.Reveal:
 					prev = n
-			cchk.call("... after the advert it opens at once", prev != null and Game.packages().is_empty())
+			cchk.call("... Open package: the opening, then the reward", prev != null and Game.packages().is_empty())
 			if prev:
 				prev.closed.emit(false)
 				prev.queue_free()

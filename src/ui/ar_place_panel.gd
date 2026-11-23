@@ -36,12 +36,13 @@ func _init(p_stage: Stage) -> void:
 	# small print when AR can't start: the exact error and device facts (a screenshot of this is all
 	# that's needed to diagnose a phone-specific problem)
 	detail = UIKit.label("", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	detail.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED   # (the phone's own error and the AR version, as reported)
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	detail.custom_minimum_size.x = 760
 	detail.visible = false
 	v.add_child(detail)
 	# after "Open Play Store": how to come back (Randy: "make it easy for them to return to the game")
-	hint = UIKit.label("After installing, come back to Emerald Break: AR starts by itself.", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	hint = UIKit.label("After installing, come back to Emerald 8 Ball Pool: AR starts by itself.", "SmallLabel", HORIZONTAL_ALIGNMENT_CENTER)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size.x = 760
 	hint.visible = false

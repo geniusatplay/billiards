@@ -2,8 +2,8 @@
 """Writes (or rewrites) the "iOS" export preset in export_presets.cfg.
 
 * version and build number: the same as the game's (project.godot config/version, the Android preset's version/code)
-* the camera question iOS shows the first time: "Emerald Break uses the camera to put the pool table in your room
-  (AR)." in every language of assets/i18n/strings.csv
+* the camera question iOS shows the first time: "Emerald 8 Ball Pool uses the camera to put the pool table in
+  your room (AR)." (the name under the icon) in every language of assets/i18n/strings.csv
 * an Xcode project only (application/export_project_only): ios_plugin/ci.sh builds it, unsigned, for Sideloadly
 
 Run it after a version bump; ios_plugin/ci.sh runs it before every iPhone export too.
@@ -15,7 +15,7 @@ import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PRESETS = os.path.join(ROOT, "export_presets.cfg")
-CAMERA = "Emerald Break uses the camera to put the pool table in your room (AR)."
+CAMERA = "Emerald 8 Ball Pool uses the camera to put the pool table in your room (AR)."
 EXCLUDE = ("tests/*, tools/*, docs/*, assets/models/previews/*, assets/models/source/*, .sync/*, ios_plugin/*, "
            "android_plugin/*, third_party/*, server/*, build/*")
 
@@ -83,6 +83,8 @@ application/short_version="{version}"
 application/version="{code}"
 application/additional_plist_content=""
 application/icon_interpolation=4
+icons/icon_1024x1024="res://assets/app_icon/icon_1024.png"
+icons/app_store_1024x1024="res://assets/app_icon/icon_1024.png"
 application/export_project_only=true
 application/delete_old_export_files_unconditionally=true
 application/min_ios_version="15.0"

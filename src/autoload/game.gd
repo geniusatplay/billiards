@@ -6,7 +6,12 @@ signal settings_changed(key: String)
 signal table_changed
 signal progress_changed          # XP, level, owned items or unopened packages changed
 
-const TITLE := "Emerald Break"
+## The game's name (Randy, 22 Nov: "lets do Emerald Online 8 Ball Pool AR and the icon can be Emerald 8 Ball Pool"; it was
+## "Emerald Break: AR Pool Game"). Save files, the server's /eb/ address and the app id keep the old name: they are
+## never shown, and changing them would lose players' progress.
+const TITLE := "Emerald Online 8 Ball Pool AR"
+const APP_NAME := "Emerald 8 Ball Pool"             # the name under the icon (project.godot config/name)
+const TITLE_LINES := ["EMERALD ONLINE", "8 BALL POOL AR"]   # the title on two lines: the menu and the loading screen
 const STUDIO := "Emerald Vortex Games"
 const VERSION := "1.1.15"
 const ALT_TITLES := ["Pocket Horizon", "Felt Realm", "Gemshot Billiards", "Cue Vortex"]
@@ -313,6 +318,18 @@ func packages_ready() -> int:
 			break
 		n += 1
 	return n
+
+
+## The advert for a package was watched to the end: the oldest package is unlocked now, ready for the player to open
+## (v1.1.15, Randy 22 Nov: "when the ad is complete i want the button to say open chest and when they press it, the
+## chests open ... i want to see the chest opening animation").
+func unlock_package_now() -> void:
+	var q: Array = progress.get("packages", [])
+	if q.is_empty():
+		return
+	(progress.get("pk_time", {}) as Dictionary).erase(str(int(q[0])))
+	progress_changed.emit()
+	request_save()
 
 
 ## Opens the oldest package: a random item of its rarity that the player does not own yet. It must have

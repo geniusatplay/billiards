@@ -31,7 +31,7 @@ class UpdateScreen extends CanvasLayer:
 		v.add_child(gem)
 		v.add_child(UIKit.label("Update needed", "H1Label", HORIZONTAL_ALIGNMENT_CENTER))
 		var store := "the App Store" if OS.get_name() == "iOS" else ("Google Play" if OS.get_name() == "Android" else "the store")
-		var msg := UIKit.label(L.t("A new version of Emerald Break is out. Update it from %s to keep playing — your progress stays with your account.") % L.t(store), "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
+		var msg := UIKit.label(L.t("A new version of Emerald Online 8 Ball Pool AR is out. Update it from %s to keep playing — your progress stays with your account.") % L.t(store), "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
 		msg.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		msg.custom_minimum_size.x = 980
@@ -69,7 +69,7 @@ class SharePopup extends Control:
 		name = "SharePopup"
 
 	static func share_text() -> String:
-		return L.t("Play pool with me in Emerald Break: AR Pool Game!") + " " + Net.SHARE_URL
+		return L.t("Play pool with me in Emerald Online 8 Ball Pool AR!") + " " + Net.SHARE_URL
 
 	func _ready() -> void:
 		var bg := ColorRect.new()
@@ -98,7 +98,7 @@ class SharePopup extends Control:
 		cc.add_child(chest)
 		_chest_box = cc
 		v.add_child(cc)
-		v.add_child(UIKit.label("Share Emerald Break", "H1Label", HORIZONTAL_ALIGNMENT_CENTER))
+		v.add_child(UIKit.label("Share Emerald 8 Ball Pool", "H1Label", HORIZONTAL_ALIGNMENT_CENTER))
 		_note = UIKit.label("", "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
 		_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_note.custom_minimum_size.x = 800
@@ -148,7 +148,7 @@ class SharePopup extends Control:
 	func _share() -> void:
 		Sfx.ui("tap")
 		var stage: Stage = router.get("stage")
-		if not (stage and stage.arcore.share(share_text(), L.t("Share Emerald Break"))):
+		if not (stage and stage.arcore.share(share_text(), L.t("Share Emerald 8 Ball Pool"))):
 			DisplayServer.clipboard_set(share_text())
 			router.call("toast", L.t("Link copied. Paste it in a message to a friend."))
 		_reward()

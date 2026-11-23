@@ -1,6 +1,6 @@
 class_name UIKit
 extends RefCounted
-## Design tokens, theme builder and widget factory for the Emerald Break UI.
+## Design tokens, theme builder and widget factory for the Emerald Online 8 Ball Pool AR UI.
 
 const INK := Color("0b1220")
 const GLASS := Color(0.071, 0.110, 0.180, 0.90)

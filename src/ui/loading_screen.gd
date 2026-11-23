@@ -1,18 +1,20 @@
 class_name LoadingScreen
 extends Control
 ## v1.1.15 (Randy: "a nice loading screen for when the app starts instead of the godot screen. it should have
-## emerald vortex games & AR Pool Game"). Five designs (STYLE_NAMES), all drawn here, frame by frame:
+## emerald vortex games & AR Pool Game"; since 22 Nov the name is "Emerald Online 8 Ball Pool AR"). Five designs (STYLE_NAMES), all drawn here, frame by frame:
 ##   0 Vortex   - the emerald gem in turning rings, a cue ball circling it
 ##   1 Break    - a cue ball breaks a rack on green cloth, then the title
 ##   2 Neon     - a neon table draws itself, the title flickers on
-##   3 AR scan  - a scanning grid, corner brackets lock onto a table
+##   3 AR scan  - a scanning grid, corner brackets lock onto a table, and the rack on it breaks (again and again);
+##                since 22 Nov the real Galaxy table and Emerald Vortex cue, from a video the game itself rendered
+##                (SCAN_VIDEO, tools/make_loading_video.py); the drawn table stays as the fallback
 ##   4 Studio   - the studio's name first, then the title with a gold shimmer and bouncing balls
 ## Shown while the phone builds its shaders, when a frame can take a second or more: time advances at most 1/20 s
 ## a frame, so after such a frame the animation carries on instead of jumping.
 
 const STYLE_NAMES := ["Vortex", "Break", "Neon", "AR scan", "Studio"]
 const STUDIO := "EMERALD VORTEX GAMES"
-const SUBTITLE := "AR POOL GAME"
+const SUBTITLE := "8 BALL POOL AR"           # (the title's second line: Game.TITLE_LINES)
 const BALL_COLORS := [Color("f4f1ea"), Color("f7c52b"), Color("1d4fd8"), Color("e12d2d"), Color("6b2fb3"), Color("f07d1a"),
 	Color("1f9d55"), Color("8a1c2b"), Color("101114")]
 
@@ -21,7 +23,7 @@ var t := 0.0
 var progress := -1.0          # 0..1 when known; below 0: an endless loading line
 var _shown := 0.0             # the line glides to `progress` instead of jumping
 var status := ""
-var title := "EMERALD BREAK"
+var title := "EMERALD ONLINE"
 var _bold: Font
 var _semi: Font
 var _med: Font
@@ -30,6 +32,22 @@ var _band_tex: GradientTexture2D
 var _balls: Array = []        # Break: [pos, vel, number]
 var _cue := {}
 var _broken := false
+# AR scan: the break on the table, worked out in the table's own units (length 2, width 1) and drawn in perspective
+var _tb: Array = []           # [pos, vel, number, sinking 0..1]; [0] is the white ball
+var _tb_t := 0.0              # time since this rack was set
+var _tb_hit := -1.0           # _tb_t when the white ball reached the rack (below 0: not yet)
+var _tb_still := 0.0          # how long every ball has been still
+var _tb_racks := 0
+# AR scan with the real table (Randy, 22 Nov: "could you do the loading page with the actual galaxy table and emerald
+# vortex cue"): the looping video, with the brackets, the scanning line and the words drawn over it
+const SCAN_VIDEO := "res://assets/loading/ar_scan_break.ogv"
+## Where the table is in the video (0..1 of its width and height): the brackets lock onto this.
+const SCAN_BOX := Rect2(0.168, 0.417, 0.664, 0.349)
+const SCAN_ASPECT := Vector2(16, 9)
+var bake_bg := false          # tools/make_loading_video.py: only the floor and its grid, still (the video's background)
+var _video: VideoStreamPlayer
+var _over: Control
+var _vrect := Rect2()
 
 
 func _init(p_style := 0) -> void:
@@ -56,6 +74,38 @@ func _ready() -> void:
 	_band_tex.fill_to = Vector2(0, 1)
 	if style == 1:
 		_rack()
+	if style == 3:
+		_scan_rack()
+		if not bake_bg and ResourceLoader.exists(SCAN_VIDEO):
+			var st = load(SCAN_VIDEO)
+			if st is VideoStream:
+				_video = VideoStreamPlayer.new()
+				_video.name = "ScanVideo"
+				_video.stream = st
+				_video.loop = true
+				_video.expand = true
+				_video.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				add_child(_video)
+				_over = Control.new()
+				_over.name = "ScanOverlay"
+				_over.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				_over.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+				_over.draw.connect(_draw_scan_over)
+				add_child(_over)
+				_place_video()
+				resized.connect(_place_video)
+				_video.play()
+
+
+## The video covers the screen (cut at the sides or top and bottom, never stretched).
+func _place_video() -> void:
+	if _video == null:
+		return
+	var k := maxf(size.x / SCAN_ASPECT.x, size.y / SCAN_ASPECT.y)
+	var vs := SCAN_ASPECT * k
+	_vrect = Rect2((size - vs) * 0.5, vs)
+	_video.position = _vrect.position
+	_video.size = _vrect.size
 
 
 func _process(delta: float) -> void:
@@ -65,6 +115,10 @@ func _process(delta: float) -> void:
 		_shown = minf(progress, _shown + maxf(progress - _shown, 0.05) * dt * 3.0)
 	if style == 1:
 		_step_break(dt)
+	if style == 3 and _video == null:
+		_step_scan(dt)
+	if _over:
+		_over.queue_redraw()
 	queue_redraw()
 
 
@@ -74,7 +128,7 @@ func _draw() -> void:
 		0: _draw_vortex()
 		1: _draw_break()
 		2: _draw_neon()
-		3: _draw_scan()
+		3: _draw_scan() if _video == null else null
 		4: _draw_studio()
 
 
@@ -124,6 +178,18 @@ func _in(t0: float, dur: float) -> float:
 
 ## Text centred on (cx, cy), with extra space between letters; per-letter colour from `tint` if given.
 func _text(font: Font, fs: int, text: String, at: Vector2, col: Color, spacing := 0.0, tint := Callable()) -> float:
+	return _text_on(self, font, fs, text, at, col, spacing, tint)
+
+
+## The same, drawn on another canvas item (the AR scan's layer over its video). Text in a script whose letters join
+## or stack (Arabic, Hindi, Thai ...: the translated "Loading…") is drawn whole, without the letter spacing.
+func _text_on(ci: CanvasItem, font: Font, fs: int, text: String, at: Vector2, col: Color, spacing := 0.0, tint := Callable()) -> float:
+	var base := at.y + (font.get_ascent(fs) - font.get_descent(fs)) * 0.5
+	for ch in text:
+		if ch.unicode_at(0) > 0x24F and ch != "…":
+			var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			ci.draw_string(font, Vector2(at.x - tw * 0.5, base), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+			return tw
 	var widths: Array[float] = []
 	var total := 0.0
 	for ch in text:
@@ -132,12 +198,11 @@ func _text(font: Font, fs: int, text: String, at: Vector2, col: Color, spacing :
 		total += w
 	total += spacing * maxf(0.0, text.length() - 1)
 	var x := at.x - total * 0.5
-	var base := at.y + (font.get_ascent(fs) - font.get_descent(fs)) * 0.5
 	for i in text.length():
 		var c := col
 		if tint.is_valid():
 			c = tint.call(x + widths[i] * 0.5, c)
-		draw_string(font, Vector2(x, base), text[i], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, c)
+		ci.draw_string(font, Vector2(x, base), text[i], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, c)
 		x += widths[i] + spacing
 	return total
 
@@ -471,7 +536,17 @@ func _draw_scan() -> void:
 	var vp := Vector2(w * 0.5, h * 0.30)
 	var horizon := h * 0.42
 	var col := UIKit.EMERALD
-	var ga := _in(0.0, 0.8)
+	var ga := 1.0 if bake_bg else _in(0.0, 0.8)
+	if bake_bg:
+		# the video's background: the floor grid, still
+		for i in range(-12, 13):
+			var bottom2 := Vector2(w * 0.5 + i * 170.0, h)
+			draw_line(vp.lerp(bottom2, (horizon - vp.y) / (h - vp.y)), bottom2, Color(col, 0.10), 1.5, true)
+		for j in 14:
+			var z2 := (j + 0.5) / 14.0
+			var y2 := horizon + (h - horizon) * z2 * z2
+			draw_line(Vector2(0, y2), Vector2(w, y2), Color(col, 0.10 * z2), 1.5, true)
+		return
 	# the floor grid: lines to the vanishing point, and cross lines coming closer
 	for i in range(-12, 13):
 		var bottom := Vector2(w * 0.5 + i * 170.0, h)
@@ -501,8 +576,7 @@ func _draw_scan() -> void:
 		draw_polyline(PackedVector2Array([tp[0], tp[1], tp[2], tp[3], tp[0]]), Color(col, 0.8 * ta), 2.0, true)
 		for p in [tp[0], tp[1], tp[2], tp[3], (tp[0] + tp[1]) * 0.5, (tp[2] + tp[3]) * 0.5]:
 			draw_circle(p, 9.0 * sc, Color(0, 0, 0, 0.8 * ta))
-		for i in 3:
-			_ball(tc + Vector2(-60 + i * 50, 10 + (i % 2) * 18) * sc, 12.0 * sc, [0, 8, 3][i], ta)
+		_draw_table_break(tp, ta)
 	# corner brackets close in from the screen's corners and lock onto it
 	var lock := _in(0.3, 1.0)
 	var box := Rect2(tc - Vector2(380, 150), Vector2(760, 300))
@@ -524,6 +598,193 @@ func _draw_scan() -> void:
 	var pct := "" if progress < 0.0 else "  %d%%" % int(_shown * 100.0)
 	_text(_semi, 28, status + pct + caret, Vector2(w * 0.5, h * 0.905), Color(col, 0.9 * _in(0.2, 0.5)), 2.0)
 	_text(_med, 22, STUDIO, Vector2(w * 0.5, h * 0.955), Color(UIKit.MUTED, 0.8 * _in(0.3, 0.8)), 8.0)
+
+
+## Over the video: the scanning line, the brackets closing in on the table, the title and the loading words.
+func _draw_scan_over() -> void:
+	var w := size.x
+	var h := size.y
+	var col := UIKit.EMERALD
+	var horizon := h * 0.42
+	var sy := horizon + fmod(t * 0.45, 1.0) * (h - horizon)
+	_over.draw_rect(Rect2(0, sy - 22, w, 44), Color(col, 0.05))
+	_over.draw_line(Vector2(0, sy), Vector2(w, sy), Color(col, 0.30), 2.0)
+	var box := Rect2(_vrect.position + SCAN_BOX.position * _vrect.size, SCAN_BOX.size * _vrect.size).grow(minf(w, h) * 0.03)
+	var lock := _in(0.2, 0.9)
+	var far := Rect2(Vector2(60, 60), size - Vector2(120, 120))
+	var bx := Rect2(far.position.lerp(box.position, lock), far.size.lerp(box.size, lock))
+	var pulse := 1.0 + (0.03 * sin(t * 5.0) if lock >= 1.0 else 0.0)
+	bx = bx.grow((pulse - 1.0) * 120.0)
+	var L := 62.0
+	var bc := Color(col, 0.95)
+	for cn in [[bx.position, Vector2(1, 1)], [Vector2(bx.end.x, bx.position.y), Vector2(-1, 1)], [bx.end, Vector2(-1, -1)], [Vector2(bx.position.x, bx.end.y), Vector2(1, -1)]]:
+		var p: Vector2 = cn[0]
+		var d: Vector2 = cn[1]
+		_over.draw_line(p, p + Vector2(L * d.x, 0), bc, 5.0, true)
+		_over.draw_line(p, p + Vector2(0, L * d.y), bc, 5.0, true)
+	var a1 := _in(0.5, 0.6)
+	_text_on(_over, _bold, 96, title, Vector2(w * 0.5, h * 0.13 + (1.0 - a1) * 14.0), Color(UIKit.TEXT, a1), 6.0)
+	_text_on(_over, _semi, 34, SUBTITLE, Vector2(w * 0.5, h * 0.215), Color(col, _in(0.8, 0.5)), 18.0)
+	var caret := "_" if fmod(t, 0.9) < 0.5 else " "
+	var pct := "" if progress < 0.0 else "  %d%%" % int(_shown * 100.0)
+	_text_on(_over, _semi, 28, status + pct + caret, Vector2(w * 0.5, h * 0.905), Color(col, 0.9 * _in(0.2, 0.5)), 2.0)
+	_text_on(_over, _med, 22, STUDIO, Vector2(w * 0.5, h * 0.955), Color(UIKit.MUTED, 0.8 * _in(0.3, 0.8)), 8.0)
+
+
+## The rack on the AR table (v1.1.15, Randy 22 Nov: "could we do d with the balls breaking on the table?"): fifteen
+## balls racked at the far end, the white ball at the near end; the stick draws back and breaks, the balls run, bounce
+## off the cushions and a few drop; once they have settled, they fade and a new rack is broken, for as long as the
+## loading lasts.
+const _TBR := 0.042                    # a ball's radius in table units (a touch larger than true, to read on a phone)
+const _TB_POCKETS := [Vector2(0, 0), Vector2(1, 0), Vector2(2, 0), Vector2(0, 1), Vector2(1, 1), Vector2(2, 1)]
+
+
+func _scan_rack() -> void:
+	_tb.clear()
+	_tb.append([Vector2(0.5, 0.5), Vector2.ZERO, 0, 0.0])
+	var apex := Vector2(1.42, 0.5)
+	var order := [1, 9, 2, 10, 8, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15]
+	var k := 0
+	for row in 5:
+		for j in row + 1:
+			_tb.append([apex + Vector2(row * _TBR * 1.74, (j - row * 0.5) * _TBR * 2.02), Vector2.ZERO, order[k], 0.0])
+			k += 1
+	_tb_t = 0.0
+	_tb_hit = -1.0
+	_tb_still = 0.0
+
+
+## When the stick strikes, in this rack's time: the first rack waits for the table and the brackets.
+func _tb_strike() -> float:
+	return 2.15 if _tb_racks == 0 else 1.25
+
+
+## How much of this rack is showing: fades in when racked, out before the next one.
+func _tb_alpha() -> float:
+	var a := 1.0 if _tb_racks == 0 else clampf(_tb_t / 0.4, 0.0, 1.0)
+	if _tb_hit >= 0.0 and _tb_still > 1.4:
+		a *= clampf(1.0 - (_tb_still - 1.4) / 0.5, 0.0, 1.0)
+	return a
+
+
+func _step_scan(dt: float) -> void:
+	if _tb.is_empty():
+		return
+	_tb_t += dt
+	var cue: Array = _tb[0]
+	if _tb_hit < 0.0:
+		if _tb_t >= _tb_strike():
+			cue[1] = Vector2(3.4, 0.0)
+		cue[0] += (cue[1] as Vector2) * dt
+		var apex: Vector2 = _tb[1][0]
+		if (cue[0] as Vector2).x >= apex.x - _TBR * 2.0:
+			# the break: every ball sent away from the point of impact, a little at random (the same every time)
+			_tb_hit = _tb_t
+			var rng := RandomNumberGenerator.new()
+			rng.seed = 11 + _tb_racks
+			# (out from the middle of the rack, a little forward: the balls spread over the whole table)
+			var mid := apex + Vector2(_TBR * 1.74 * 2.0, 0.0)
+			for i in range(1, _tb.size()):
+				var b: Array = _tb[i]
+				var d: Vector2 = (b[0] as Vector2) - mid
+				var dir := (d.normalized() if d.length() > 0.001 else Vector2.RIGHT).rotated(rng.randf_range(-0.7, 0.7))
+				b[1] = (dir + Vector2(0.2, 0.0)).normalized() * rng.randf_range(1.6, 3.2)
+			cue[1] = Vector2(-0.35, rng.randf_range(-0.3, 0.3))
+		return
+	var moving := false
+	for b in _tb:
+		if float(b[3]) > 0.0:
+			b[3] = minf(1.0, float(b[3]) + dt * 4.0)
+			continue
+		var p: Vector2 = b[0]
+		var v: Vector2 = b[1]
+		p += v * dt
+		v *= exp(-0.75 * dt)
+		v = v.move_toward(Vector2.ZERO, 0.1 * dt)
+		for c in 2:
+			var lo := _TBR
+			var hi := (2.0 if c == 0 else 1.0) - _TBR
+			if p[c] < lo or p[c] > hi:
+				# near a pocket the ball drops (never the white ball), else it comes off the cushion
+				if int(b[2]) != 0 and _near_pocket(p):
+					b[3] = 0.01
+				v[c] = -v[c] * 0.82
+				p[c] = clampf(p[c], lo, hi)
+		b[0] = p
+		b[1] = v
+		if v.length() > 0.02:
+			moving = true
+	for i in _tb.size():
+		for j in range(i + 1, _tb.size()):
+			if float(_tb[i][3]) > 0.0 or float(_tb[j][3]) > 0.0:
+				continue
+			var d: Vector2 = (_tb[j][0] as Vector2) - (_tb[i][0] as Vector2)
+			var dist := d.length()
+			if dist < _TBR * 2.0 and dist > 0.0001:
+				var nrm := d / dist
+				var push := (_TBR * 2.0 - dist) * 0.5
+				_tb[i][0] -= nrm * push
+				_tb[j][0] += nrm * push
+				var rel: float = ((_tb[i][1] as Vector2) - (_tb[j][1] as Vector2)).dot(nrm)
+				if rel > 0.0:
+					_tb[i][1] -= nrm * rel * 0.96
+					_tb[j][1] += nrm * rel * 0.96
+	_tb_still = 0.0 if moving else _tb_still + dt
+	if _tb_still > 1.95 or _tb_t - _tb_hit > 9.0:
+		_tb_racks += 1
+		_scan_rack()
+
+
+func _near_pocket(p: Vector2) -> bool:
+	for pk in _TB_POCKETS:
+		if p.distance_to(pk) < 0.11:
+			return true
+	return false
+
+
+## A point of the table (its own units) on the screen: the felt's corners are back-left, back-right, front-right,
+## front-left.
+func _tb_screen(p: Vector2, tp: PackedVector2Array) -> Vector2:
+	var u := p.x * 0.5
+	var back := tp[0].lerp(tp[1], u)
+	var front := tp[3].lerp(tp[2], u)
+	return back.lerp(front, p.y)
+
+
+func _draw_table_break(tp: PackedVector2Array, ta: float) -> void:
+	if _tb.is_empty():
+		return
+	var a := ta * _tb_alpha()
+	var wb := tp[0].distance_to(tp[1])
+	var wf := tp[3].distance_to(tp[2])
+	# the stick behind the white ball until it strikes: drawn back, then forward
+	if _tb_hit < 0.0 and a > 0.0:
+		var st := _tb_strike()
+		var back := 0.16 * _in_range(_tb_t, st - 0.65, st - 0.2) if _tb_t < st else 0.0
+		var cp: Vector2 = _tb[0][0]
+		var tip := cp - Vector2(_TBR + 0.03 + back, 0.0)
+		var s_tip := _tb_screen(tip, tp)
+		# (straight along the table's middle line, in from the middle of the left end: Randy, 22 Nov)
+		var s_butt := _tb_screen(tip - Vector2(1.5, 0.0), tp)
+		var s_ferr := _tb_screen(tip - Vector2(0.12, 0.0), tp)
+		draw_line(s_butt, s_tip, Color(Color("7a4a24"), a), 9.0, true)
+		draw_line(s_ferr, s_tip, Color(Color("e9d8b8"), a), 7.0, true)
+		draw_line(s_tip + (s_butt - s_tip).normalized() * 5.0, s_tip, Color(Color("3e6fb5"), a), 7.0, true)
+	# the balls, the far ones first
+	var order := range(_tb.size())
+	order.sort_custom(func(i, j): return float((_tb[i][0] as Vector2).y) < float((_tb[j][0] as Vector2).y))
+	for i in order:
+		var b: Array = _tb[i]
+		var sink := float(b[3])
+		if sink >= 1.0:
+			continue
+		var p: Vector2 = b[0]
+		var px_per_unit := lerpf(wb, wf, p.y) * 0.5
+		_ball(_tb_screen(p, tp), _TBR * px_per_unit * (1.0 - 0.6 * sink), int(b[2]), a * (1.0 - sink))
+
+
+func _in_range(x: float, x0: float, x1: float) -> float:
+	return smoothstep(0.0, 1.0, clampf((x - x0) / maxf(x1 - x0, 0.0001), 0.0, 1.0))
 
 
 # ======================================================================== 4 Studio

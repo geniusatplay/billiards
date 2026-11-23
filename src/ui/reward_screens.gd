@@ -3,6 +3,19 @@ extends RefCounted
 ## Levels and packages on screen: the XP bar, the package page with its opening animation, the reward card.
 
 
+## After a rewarded advert: the button that now opens the chest or package chimes and pulses three times, so the
+## player sees what to press next (v1.1.15).
+static func invite(b: Button) -> void:
+	if b == null or not is_instance_valid(b) or not b.visible:
+		return
+	Sfx.play("turn_chime", 0.7)
+	b.pivot_offset = b.size * 0.5
+	var tw := b.create_tween()
+	for i in 3:
+		tw.tween_property(b, "scale", Vector2(1.08, 1.08), 0.16).set_trans(Tween.TRANS_SINE)
+		tw.tween_property(b, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_SINE)
+
+
 ## ------------------------------------------------------------ XP bar with the level badge
 class XpBar extends Control:
 	signal leveled(level: int)
@@ -294,16 +307,26 @@ class PackageScreen extends MenuScreens.Screen:
 			Ads.show("package", earned, closed_early)
 			while not finished[0] and is_inside_tree():
 				await get_tree().process_frame
-			if not got_it[0]:
+			if got_it[0]:
+				# watched to the end: the package is unlocked and "Open package" takes its place; the player opens
+				# it, and sees it open (Randy, 22 Nov)
+				Game.unlock_package_now()
 				_end_run()
+				_invite(_open_btn)
 				return
-		_run(all, by_ad)
+			_end_run()
+			return
+		_run(all, false)
 
 	func _end_run() -> void:
 		_busy = false
 		for b in [_open_btn, _ad_btn, _all_btn]:
 			b.disabled = false
 		_refresh()
+
+	## After an advert: the button that now opens it chimes and pulses a few times.
+	func _invite(b: Button) -> void:
+		RewardScreens.invite(b)
 
 	func _run(all: bool, first_by_ad: bool) -> void:
 		var by_ad := first_by_ad
@@ -437,6 +460,9 @@ class ChestScreen extends MenuScreens.Screen:
 		_busy = false
 		_ad_btn.disabled = false
 		_refresh()
+		if Game.chest_ready() and _open_btn.visible:
+			# the advert opened it: "Open XP chest" is there, and the player opens it (Randy, 22 Nov)
+			RewardScreens.invite(_open_btn)
 
 	func _open() -> void:
 		var gift := not Game.gift_chests().is_empty()

@@ -1,4 +1,4 @@
-// Emerald Break - walk-around AR on iPhone / iPad with Apple ARKit (GDExtension, Objective-C++).
+// Emerald Online 8 Ball Pool AR (was Emerald Break) - walk-around AR on iPhone / iPad with Apple ARKit (GDExtension, Objective-C++).
 //
 // Same contract as the Android plugin (android_plugin/.../ArCoreSession.java), so the game's GDScript
 // (src/ar/arcore_bridge.gd) needs no second code path. getState() layout (40 floats):
@@ -217,7 +217,7 @@ static void ear_put_pose(float *p_s, int p_at, simd_float4x4 p_m) {
 
 - (void)failPermission {
 	// "SecurityException" + "permission": the game's _classify() turns this into its camera-permission panel
-	_lastError = @"SecurityException: camera permission denied (allow the camera for Emerald Break in Settings)";
+	_lastError = @"SecurityException: camera permission denied (allow the camera for Emerald 8 Ball Pool in Settings)";
 	_status = -1;
 	_running = NO;
 	_asking = NO;

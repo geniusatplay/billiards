@@ -1,5 +1,5 @@
 #!/bin/bash
-# Emerald Break - the iPhone build, step by step (run on a Mac with Xcode; GitHub Actions runs it, see
+# Emerald Online 8 Ball Pool AR - the iPhone build, step by step (run on a Mac with Xcode; GitHub Actions runs it, see
 # .github/workflows/ios.yml). Each step can be run on its own:
 #
 #   ios_plugin/ci.sh plugin   build the ARKit plugin (godot-cpp 4.5 + src/emerald_ar.mm) into addons/emeraldar/

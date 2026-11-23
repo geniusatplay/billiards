@@ -1,4 +1,4 @@
-// Emerald Break - walk-around AR on iPhone / iPad (Apple ARKit), as a GDExtension.
+// Emerald Online 8 Ball Pool AR (was Emerald Break) - walk-around AR on iPhone / iPad (Apple ARKit), as a GDExtension.
 //
 // The Engine singleton "EmeraldAR" has exactly the methods of the Android plugin of the same name
 // (android_plugin/.../EmeraldARPlugin.java), so src/ar/arcore_bridge.gd drives both the same way:

@@ -89,11 +89,13 @@ class MainMenu extends Screen:
 		lg.pressed.connect(func(): router.call("open_language"))
 		brand.add_child(lg)
 		left.add_child(brand)
-		var title := UIKit.label(Game.TITLE.to_upper(), "TitleLabel")
+		var title := UIKit.label(Game.TITLE_LINES[0], "TitleLabel")
+		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED    # (the name)
 		title.add_theme_constant_override("outline_size", 0)
 		left.add_child(title)
-		# v1.1.15: the game's full name, as on the loading screen and in the stores ("Emerald Break: AR Pool Game")
-		var tag := UIKit.label("AR POOL GAME", "H3Label")
+		# v1.1.15: the rest of the game's full name, as on the loading screen and in the stores ("Emerald Online 8 Ball
+		# Pool AR", Randy 22 Nov)
+		var tag := UIKit.label(Game.TITLE_LINES[1], "H3Label")
 		tag.name = "MenuSubtitle"
 		tag.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED      # (part of the name)
 		var spaced := FontVariation.new()

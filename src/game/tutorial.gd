@@ -6,12 +6,12 @@ extends Control
 ## objective, the next objective comes only when this one is met, Skip leaves at any time (and doesn't count), and the
 ## end gives the gift chest that opens at once. Five versions (VERSIONS) share the objectives and differ in which
 ## objectives and how they are shown:
-##   0 Coach marks      - a pointer at the control to use, five objectives (the one the game plays)
+##   0 Coach marks      - a pointer at the control to use, five objectives
 ##   1 Three challenges - a checklist of three set-up shots
 ##   2 Quick start      - three objectives, the fastest
 ##   3 Watch, then you  - each shot is shown first (the cue turns to the right line), then the player copies it
-##   4 Mini match       - a 3-ball game with a coach who talks the player through it (it ends on the 8, potted
-##                        after the coach's foul gives ball in hand)
+##   4 Mini match       - a 3-ball game with a coach who talks the player through it: break, the 1, the 2, then the 8
+##                        (the one the game plays: Randy picked E on 22 Nov; as with A on 18 Nov, no ball-in-hand step)
 
 signal finished(done: bool)
 
@@ -20,7 +20,7 @@ const VERSIONS := [
 	{"name": "Three challenges", "steps": ["pot", "draw", "hand"]},
 	{"name": "Quick start", "steps": ["aim", "pot", "eight"]},
 	{"name": "Watch, then you", "steps": ["pot", "cut", "draw"]},
-	{"name": "Mini match with a coach", "steps": ["break", "pot1", "pot2", "hand"]},
+	{"name": "Mini match with a coach", "steps": ["break", "pot1", "pot2", "eight"]},   # (22 Nov: no ball in hand)
 ]
 ## What each objective asks, in the order: title, how to do it, and (version 4) what the coach says.
 const TEXT := {
@@ -630,7 +630,7 @@ func _judge() -> void:
 			ok = float(game.last_shot.get("power", 0.0)) > 0.45
 			if not ok:
 				why = "Harder! Use full power."
-	if version == 4 and 8 in potted and id != "hand2_8":
+	if version == 4 and 8 in potted and not (id in ["hand2_8", "eight"]):
 		game.call("_respot_eight")
 		why = "Not the 8 yet: it's always the last ball."
 	if str(main.get("_tour_dir")) != "":

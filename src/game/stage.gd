@@ -759,7 +759,7 @@ func ar_block_text() -> String:
 		"not_installed": return "AR needs Google Play Services for AR (free, from Google). Install it, then come back to the game."
 		"too_old": return "Google Play Services for AR needs an update. Update it, then come back to the game."
 		"sdk_old": return "This version of the game is too old for the AR services on this phone."
-		"permission": return "AR needs one permission: the camera, to find your floor (the picture stays on your phone). Allow camera access for Emerald Break, then tap Try again, or play in place with no camera."
+		"permission": return "AR needs one permission: the camera, to find your floor (the picture stays on your phone). Allow camera access for Emerald 8 Ball Pool, then tap Try again, or play in place with no camera."
 		"camera": return "The camera is being used by another app. Close other camera apps, then try again."
 		"timeout": return "AR took too long to start. Try again."
 	return "AR couldn't start. Try again."
