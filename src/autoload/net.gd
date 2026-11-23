@@ -14,7 +14,7 @@ var url := URL
 ## one before could go wrong (rules, physics, what is sent). Before v1.1.13 the full game version was used, so
 ## two phones a patch apart (new songs, new gear) never met. net3 (v1.1.14): aiming is sent as samples, a shot
 ## carries its path, events are numbered; a 1.1.13 phone would also strike a late-reported shot twice.
-const ONLINE_VERSION := "net3"
+const ONLINE_VERSION := "net4"     # (net4, 22 Nov: the break starts one ball behind the head string)
 
 var fake = null            # tests: an object with handle(action, body) -> Dictionary instead of the real server
 var last_error := ""

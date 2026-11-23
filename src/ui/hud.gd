@@ -54,6 +54,7 @@ var _banner_tw: Tween
 var _pending_turn := {}
 var _feed: PotFeed
 var _btn_free: Button
+var _hand_ring: Control
 var _fl_panel: PanelContainer
 var _fl_hold := Vector3.ZERO     # free-look button held: turn, tilt, zoom per second
 
@@ -159,15 +160,24 @@ func _build() -> void:
 		var idx := i
 		_btn_views[i].pressed.connect(func(): _set_view(idx))
 		_tools.add_child(_btn_views[i])
-		if i == 2:
-			# free look, in the top view only (v1.1.5)
-			_btn_free = UIKit.icon_button("eye", 82, "Free look")
-			_btn_free.name = "FreeLookButton"
-			_btn_free.pressed.connect(func(): stage.set_free_look(not stage.free_look))
-			_tools.add_child(_btn_free)
-	_btn_hand = UIKit.icon_button("hand", 82, "Move the cue ball")
+	# (free look's eye is on the free-look card since 22 Nov, Randy: "the eye should be on whatever popup is there,
+	# not needed at the main right menu": _build_free_look)
+	_btn_hand = UIKit.icon_button("cue_ball", 82, "Move the cue ball")
 	_btn_hand.pressed.connect(func(): game.start_ball_in_hand())
 	_tools.add_child(_btn_hand)
+	# ball in hand to be had (the break, or after the other player's foul): the button's edge blinks yellow (Randy,
+	# 22 Nov: "when there is a ball in hand available, make the icons edge blink yellow (eg at the start)")
+	_hand_ring = Control.new()
+	_hand_ring.name = "HandRing"
+	_hand_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hand_ring.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_hand_ring.visible = false
+	_hand_ring.draw.connect(func():
+		var a := 0.35 + 0.65 * absf(sin(Time.get_ticks_msec() / 260.0))
+		var r := minf(_hand_ring.size.x, _hand_ring.size.y) * 0.5
+		_hand_ring.draw_arc(_hand_ring.size * 0.5, r - 3.0, 0.0, TAU, 56, Color(UIKit.GOLD, a), 6.0, true)
+		_hand_ring.draw_arc(_hand_ring.size * 0.5, r + 3.0, 0.0, TAU, 56, Color(UIKit.GOLD, a * 0.35), 4.0, true))
+	_btn_hand.add_child(_hand_ring)
 	_btn_undo = UIKit.icon_button("undo", 82, "Undo last shot")
 	_btn_undo.pressed.connect(func(): game.undo())
 	_tools.add_child(_btn_undo)
@@ -418,7 +428,9 @@ func _build_ar_panel() -> void:
 		Game.world_ready = "studio"         # (and for the next matches too, until Place world is chosen again)
 		Game.set_s("ar_mode", "studio")
 		stage.set_mode(Stage.Mode.STUDIO)
+		stage.set_view(Stage.View.AIM)      # (Play in place's own view, 22 Nov)
 		_show_ar_panel(false)
+		_refresh_tools()
 		game.on_table_placed())
 	_ar_panel.visible = false
 	add_child(_ar_panel)
@@ -434,9 +446,7 @@ func _layout() -> void:
 	_place_hint()
 	_power_lbl.position = Vector2(vp.x * 0.5 - 200, vp.y * 0.5 + 140)
 	_power_lbl.size = Vector2(400, 60)
-	# free-look buttons: beside the tool column, half way down
-	_fl_panel.reset_size()
-	_fl_panel.position = Vector2(vp.x - 116 - 24 - _fl_panel.size.x if right else 30 + 82 + 24, vp.y * 0.5 - _fl_panel.size.y * 0.5 + 40)
+	_place_fl_panel()
 	# the pot feed: under the player card, on the side away from the tool buttons
 	_feed.position = Vector2(30 if right else vp.x - 360, 236)
 	_feed.max_height = maxf(vp.y - 290.0 - 16.0 - 236.0, 160.0)    # down to the spin pad
@@ -450,6 +460,23 @@ func _layout() -> void:
 	_hand_place.reset_size()
 	_hand_place.position = Vector2((vp.x - _hand_place.size.x) * 0.5, vp.y - _hand_place.size.y - 70)
 	_fps.position = Vector2(30, vp.y - 44)
+
+
+## The free-look card: beside the tool column, half way down when open (3 × 3 buttons); closed it is only the eye,
+## in the same bottom-left corner, so the eye does not jump when the card opens or closes.
+func _place_fl_panel() -> void:
+	if _fl_panel == null:
+		return
+	var vp := size
+	var right := not bool(Game.get_s("left_handed"))
+	var sb := _fl_panel.get_theme_stylebox("panel")
+	var full := Vector2(3 * 76 + 2 * 8, 3 * 76 + 2 * 8) + (sb.get_minimum_size() if sb else Vector2.ZERO)
+	var left_x := vp.x - 116 - 24 - full.x if right else 30.0 + 82 + 24
+	var bottom := vp.y * 0.5 + full.y * 0.5 + 40
+	var want := full if (stage and stage.free_look) else Vector2(76, 76) + (sb.get_minimum_size() if sb else Vector2.ZERO)
+	_fl_panel.reset_size()
+	_fl_panel.size = want
+	_fl_panel.position = Vector2(left_x, bottom - want.y)
 
 
 ## Bottom-centre, sized to its content (the text and the install button change with the AR mode).
@@ -483,6 +510,16 @@ func _set_view(i: int) -> void:
 	_refresh_tools()
 
 
+## Ball in hand is there to be taken (the break, or after the other player's foul): the hand button blinks.
+## Practice only at its first break (the cue ball is free there all the time); not while it is being placed.
+func hand_blinking() -> bool:
+	if game == null or _btn_hand == null or not _btn_hand.is_visible_in_tree() or game.tutorial:
+		return false
+	if game.state != PoolGame.State.AIM or not game.is_human_turn():
+		return false
+	return game.break_pending() or (game.mode == "versus" and game.rules.ball_in_hand)
+
+
 func _refresh_tools() -> void:
 	_btn_hand.visible = (game.mode == "practice" and game.state in [PoolGame.State.AIM, PoolGame.State.BALL_IN_HAND]) or ((game.rules.ball_in_hand or game.break_pending()) and game.is_human_turn() and game.state == PoolGame.State.AIM)
 	_btn_undo.visible = game.mode == "practice" and not game.tutorial
@@ -494,9 +531,13 @@ func _refresh_tools() -> void:
 	_btn_gear.visible = gear_drawer_allowed()
 	if not _btn_gear.visible and gear_open():
 		_drawer.close()
-	_btn_free.visible = stage.view == Stage.View.TOP
-	_btn_free.modulate = Color(1, 1, 1, 1) if stage.free_look else Color(1, 1, 1, 0.6)
-	_fl_panel.visible = stage.free_look
+	if _fl_panel and _btn_free:
+		_btn_free.modulate = Color(1, 1, 1, 1) if stage.free_look else Color(1, 1, 1, 0.75)
+		_fl_panel.visible = stage.view == Stage.View.TOP
+		var fl_grid := _fl_panel.get_child(0) as Control
+		for n in fl_grid.get_children():
+			(n as Control).visible = n == _btn_free or stage.free_look
+		_place_fl_panel()
 	for i in 3:
 		var active := false
 		match i:
@@ -597,7 +638,7 @@ func _build_free_look() -> void:
 		["chev_left", "Turn left", Vector3(deg_to_rad(-10), 0, 1), Vector3(deg_to_rad(-70), 0, 1)],
 		["recenter", "Whole table", Vector3.ZERO, Vector3.ZERO],
 		["chev_right", "Turn right", Vector3(deg_to_rad(10), 0, 1), Vector3(deg_to_rad(70), 0, 1)],
-		["", "", Vector3.ZERO, Vector3.ZERO],
+		["eye", "Free look", Vector3.ZERO, Vector3.ZERO],
 		["chev_down", "Tilt down", Vector3(0, deg_to_rad(-6), 1), Vector3(0, deg_to_rad(-45), 1)],
 		["", "", Vector3.ZERO, Vector3.ZERO],
 	]
@@ -611,6 +652,12 @@ func _build_free_look() -> void:
 		var b := UIKit.icon_button(str(c[0]), 76, str(c[1]))
 		b.name = "FL_" + str(c[0])
 		g.add_child(b)
+		if str(c[0]) == "eye":
+			# free look on / off (in the top view only, v1.1.5); the card shows only this button while it is off
+			b.name = "FreeLookButton"
+			_btn_free = b
+			b.pressed.connect(func(): stage.set_free_look(not stage.free_look))
+			continue
 		if str(c[0]) == "recenter":
 			b.pressed.connect(func(): stage.free_look_reset())
 			continue
@@ -835,6 +882,11 @@ func _refresh() -> void:
 func _process(_delta: float) -> void:
 	if game == null:
 		return
+	var blink := hand_blinking()
+	if _hand_ring and _hand_ring.visible != blink:
+		_hand_ring.visible = blink
+	if blink and _hand_ring:
+		_hand_ring.queue_redraw()
 	if _fl_hold != Vector3.ZERO and stage.free_look:
 		stage.free_look_step(_fl_hold.x * _delta, _fl_hold.y * _delta, pow(_fl_hold.z, _delta))
 	var d := game.info()

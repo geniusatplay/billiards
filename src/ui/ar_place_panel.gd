@@ -71,10 +71,10 @@ func _init(p_stage: Stage) -> void:
 	# same (twist to turn, pinch to size)
 	adjust = UIKit.hbox(12)
 	adjust.alignment = BoxContainer.ALIGNMENT_CENTER
-	turn_l = UIKit.icon_button("undo", 76, "Turn left")
+	turn_l = UIKit.icon_button("rot_left", 76, "Turn left")
 	turn_l.name = "TurnLeft"
 	turn_l.pressed.connect(func(): stage.turn_preview(deg_to_rad(15.0)))
-	turn_r = UIKit.icon_button("refresh", 76, "Turn right")
+	turn_r = UIKit.icon_button("rot_right", 76, "Turn right")
 	turn_r.name = "TurnRight"
 	turn_r.pressed.connect(func(): stage.turn_preview(-deg_to_rad(15.0)))
 	adjust.add_child(turn_l)

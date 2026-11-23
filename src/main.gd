@@ -421,6 +421,10 @@ func start_match(cfg: Dictionary) -> void:
 	# v1.1.15: the table the player put down in the room from the menus is played on where it stands
 	if not world_kept():
 		stage.set_mode(stage.auto_mode())
+	# Play in place starts in the aim view (the target button; Randy, 22 Nov: "the target should be the default view
+	# for play in place... this is the play in place aiming mode")
+	if stage.mode == Stage.Mode.STUDIO:
+		stage.set_view(Stage.View.AIM)
 	stage.new_match_scene()   # (only shows with "Scene background in AR" on, once the table is placed)
 	Sfx.music_context(true)
 	game = PoolGame.new()
@@ -567,6 +571,8 @@ func switch_view(to: String) -> void:
 	stage.switch_mode(want)
 	if want != Stage.Mode.STUDIO:
 		resume()
+	else:
+		stage.set_view(Stage.View.AIM)      # (Play in place's own view)
 
 
 ## Pause menu -> Scene: the scenes that can be shown right now (round an AR table only the ones with a sky).
@@ -1679,7 +1685,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -2248,7 +2254,7 @@ func _tour_step(dir: String, s: String) -> void:
 			res.append(["world size 35% -> mini on a desk at 0.35", Game.get_s("surface") == "desk" and is_equal_approx(float(Game.get_s("ar_scale_desk")), 0.35) and is_equal_approx(Game.world_size(), 0.35)])
 			(sl.call("Worldheight") as HSlider).value = 0.9
 			res.append(["world height -> the table stands 90 cm", is_equal_approx(float(Game.get_s("table_height")), 0.9) and absf(stage.table_root.global_position.y - 0.9) < 0.01])
-			res.append(["the world background chips are there", _screen.find_child("WorldBackground", true, false) != null])
+			res.append(["no 'World background' choice (22 Nov: Play in place is the scene from Choose Gear)", _screen.find_child("WorldBackground", true, false) == null])
 			res.append(["testing build: the developer tools card and its debug button", mbtn_text(_screen, "Open debug menu")])
 			await _shot(dir, "options")
 			(_screen.find_child("SettingsLanguage", true, false) as Button).pressed.emit()
@@ -2376,6 +2382,78 @@ func _tour_step(dir: String, s: String) -> void:
 				all_ok = all_ok and r[1]
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("SHARE %s" % ("PASS" if all_ok else "FAIL"))
+		"inplace":
+			# 22 Nov (Randy): Play in place = the scene from Choose Gear, the aim (target) view to start, the eye on
+			# the free-look card, the hand button blinking yellow while ball in hand is there to be taken
+			var ip_bad: Array = []
+			var ipc := func(label: String, good: bool, detail := "") -> void:
+				if not good:
+					ip_bad.append(label)
+				print("  %s  %s  %s" % ["ok  " if good else "FAIL", label, detail])
+			var keep_sc: String = str(Game.get_s("scene"))
+			var keep_bg: bool = Game.get_s("ar_background")
+			Game.set_s("control_scheme", "pro_dial")      # (the players' only cue control: the pictures show what they see)
+			_end_match()
+			# AR first, with a scene behind the table (a random one), then Play in place: the gear scene must come back
+			Game.set_s("scene", "orbit")
+			Game.set_s("ar_background", true)
+			Game.set_s("ar_mode", "auto")
+			stage.arcore.simulate = true
+			stage.arcore.sim_floor = 0.0
+			stage.arcore.sim_availability = "installed"
+			stage.arcore.sim_path = func(_t: float) -> Transform3D:
+				return Transform3D(Basis.looking_at(Vector3(0, -0.75, -1.0), Vector3.UP), Vector3(0, 1.2, 0))
+			start_match({"mode": "versus", "vs_ai": true, "ai_level": 0})
+			await _wait(1.6)
+			ipc.call("AR to start with: the overview (the camera's own view)", stage.is_ar() and stage.view == Stage.View.OVERVIEW)
+			(hud.get("_ar_studio") as Button).pressed.emit()
+			await _wait(0.8)
+			ipc.call("'Play in place' from the AR panel -> the Studio view, in the aim view", not stage.is_ar() and stage.view == Stage.View.AIM)
+			ipc.call("... with the scene from Choose Gear (Orbit Station)", str(stage.get("_scene").get("id", "")) == "orbit", str(stage.get("_scene").get("id", "")))
+			_end_match()
+			stage.arcore.simulate = false
+			Game.set_s("ar_mode", "studio")
+			Game.set_s("ar_background", false)
+			Game.set_s("scene", "reef")
+			start_match({"mode": "versus", "vs_ai": true, "ai_level": 0})
+			await _wait(1.6)
+			ipc.call("a new match in Play in place starts in the aim view", stage.view == Stage.View.AIM and (hud.get("_btn_views")[1] as Button).modulate.a > 0.95)
+			ipc.call("... in the Choose Gear scene (Coral Deep)", str(stage.get("_scene").get("id", "")) == "reef", str(stage.get("_scene").get("id", "")))
+			ipc.call("... the cue ball starts behind the head string", game.cue_ball_pos().x < Rack.head_spot(game.sim).x)
+			ipc.call("... ball in hand for the break: the hand button blinks", hud.hand_blinking() and (hud.get("_hand_ring") as Control).visible)
+			await _wait(0.2)
+			await _shot(dir, "inplace_start")
+			game.start_ball_in_hand()
+			await _wait(0.5)
+			ipc.call("placing from the aim view: the overview while the ball is moved", stage.view == Stage.View.OVERVIEW and not hud.hand_blinking())
+			game.move_cue_ball(Rack.break_spot(game.sim) + Vector2(-0.1, 0.15))
+			game.confirm_cue_placement()
+			await _wait(0.4)
+			ipc.call("... and the aim view again once it is placed", stage.view == Stage.View.AIM)
+			(hud.get("_btn_views")[2] as Button).pressed.emit()
+			await _wait(0.8)
+			await _shot(dir, "inplace_top")
+			ipc.call("top view: the eye on the free-look card, not in the tool column", (hud.get("_btn_free") as Control).is_visible_in_tree() and not (hud.get("_tools") as Control).is_ancestor_of(hud.get("_btn_free")))
+			(hud.get("_btn_free") as Button).pressed.emit()
+			await _wait(0.5)
+			await _shot(dir, "inplace_freelook")
+			ipc.call("eye -> the card opens with its buttons", stage.free_look and hud.free_look_button("plus").is_visible_in_tree())
+			(hud.get("_btn_free") as Button).pressed.emit()
+			await _wait(0.4)
+			ipc.call("eye again -> just the eye", not stage.free_look and not hud.free_look_button("plus").is_visible_in_tree() and (hud.get("_btn_free") as Control).is_visible_in_tree())
+			_end_match()
+			_stack.clear()
+			Game.world_ready = ""
+			go("place_world")
+			await _wait(0.6)
+			var scl: Label = _screen.find_child("WorldSceneName", true, false)
+			ipc.call("the Place world card names the scene from Choose Gear", scl != null and scl.text == str(Game.scene_style()["name"]), scl.text if scl else "")
+			await _shot(dir, "inplace_card")
+			Game.set_s("scene", keep_sc)
+			Game.set_s("ar_background", keep_bg)
+			_stack.clear()
+			go("menu")
+			print("INPLACE %s %s" % ["PASS" if ip_bad.is_empty() else "FAIL", str(ip_bad)])
 		"lang_name":
 			# the new name (Randy, 22 Nov: "Emerald Online 8 Ball Pool AR", "Emerald 8 Ball Pool" under the icon; "make
 			# sure to update the languages too") in every language: the menu's title, the share popup, "Update needed",
@@ -2835,7 +2913,7 @@ func _tour_step(dir: String, s: String) -> void:
 			res.append(["...camera allowed in Settings, back in the game -> AR running", stage.ar_state == Stage.ArState.RUNNING])
 			var keep_loc := TranslationServer.get_locale()
 			TranslationServer.set_locale("de")
-			var help_de := ARCoreBridge.ios_help("Place world (on the main menu, and on the screen before a match) offers two ways. In front of me: point the phone at the floor or a desk and sweep it slowly until the table appears, then tap Place. It stays put in your room: walk all the way around it, lean in, crouch. Settings → World sets its size and height. Play in place: no camera, the table in its own world (Settings → World background).\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in place instead.")
+			var help_de := ARCoreBridge.ios_help("Place world (on the main menu, and on the screen before a match) offers two ways. In front of me: point the phone at the floor or a desk and sweep it slowly until the table appears, then tap Place. It stays put in your room: walk all the way around it, lean in, crouch. Settings → World sets its size and height. Play in place: no camera, the table in its own world (the scene you picked in Choose Gear).\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in place instead.")
 			TranslationServer.set_locale(keep_loc)
 			res.append(["iPhone help text (German): names Apple ARKit, not ARCore, rest translated",
 				help_de.contains("AR nutzt Apple ARKit") and not help_de.contains("ARCore") and help_de.begins_with("„Welt platzieren“") and help_de.count("\n") == 1])
@@ -3378,6 +3456,14 @@ func _tour_step(dir: String, s: String) -> void:
 						var mc: Control = _screen.get_node_or_null("MenuColumn")
 						if ml and mc:
 							print("  menu gap [%s] %d px" % [code, mc.get_global_rect().position.x - ml.get_global_rect().end.x])
+							var mtl: Label = ml.find_child("MenuTitle", false, false)
+							if mtl:
+								var tw: float = mtl.get_theme_font("font").get_string_size(mtl.text, HORIZONTAL_ALIGNMENT_LEFT, -1, mtl.get_theme_font_size("font_size")).x
+								var tgap: float = mc.get_global_rect().position.x - (mtl.get_global_rect().position.x + tw)
+								print("  title gap [%s] %d px" % [code, tgap])
+								if tgap < 40.0:
+									problems += 1
+									print("  TOO CLOSE [%s/menu] the name ends %d px from the buttons" % [code, tgap])
 						if ml and mc and mc.get_global_rect().position.x < ml.get_global_rect().end.x + 20.0:
 							problems += 1
 							print("  OVERLAP [%s/menu] buttons start at %d, the title ends at %d" % [code, mc.get_global_rect().position.x, ml.get_global_rect().end.x])
@@ -3755,12 +3841,17 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(3.2)
 			var head_x: float = Rack.head_spot(game.sim).x
 			bp.call("the hand button is offered before the break", (hud.get("_btn_hand") as Control).visible)
+			# 22 Nov (Randy: "make sure their starting ball placement is a legal starting placement"; "when there is
+			# a ball in hand available, make the icons edge blink yellow")
+			bp.call("the cue ball starts behind the head string, not on it", game.cue_ball_pos().x < head_x - game.sim.R and game.cue_ball_pos().distance_to(Rack.break_spot(game.sim)) < 0.0001, str(game.cue_ball_pos()))
+			bp.call("... and the hand button's edge blinks yellow", hud.hand_blinking())
 			await _shot(dir, "break_aim")
 			game.start_ball_in_hand()
 			await _wait(0.5)
 			bp.call("hand button -> the cue ball can be moved", game.state == PoolGame.State.BALL_IN_HAND)
 			game.move_cue_ball(Vector2(0.5, 0.2))
-			bp.call("dragged past the line -> stops on the line", absf(game.cue_ball_pos().x - head_x) < 0.001 and absf(game.cue_ball_pos().y - 0.2) < 0.001, str(game.cue_ball_pos()))
+			bp.call("dragged past the line -> stops just behind it", game.cue_ball_pos().x < head_x and absf(game.cue_ball_pos().x - head_x) < 0.002 and absf(game.cue_ball_pos().y - 0.2) < 0.001, str(game.cue_ball_pos()))
+			bp.call("... placing: no blinking", not hud.hand_blinking())
 			game.move_cue_ball(Vector2(-5.0, 5.0))
 			bp.call("dragged off the table -> stays on the cloth", game.sim.table.in_bounds(game.cue_ball_pos(), -0.0001), str(game.cue_ball_pos()))
 			game.move_cue_ball(Vector2(head_x - 0.25, -0.22))
@@ -4965,14 +5056,19 @@ func _tour_step(dir: String, s: String) -> void:
 			start_match({"mode": "practice"})
 			await _wait(1.4)
 			var fbtn: Button = hud.get("_btn_free")
-			lchk.call("not in the overview: no free-look button", not fbtn.visible)
+			var tools_c: Control = hud.get("_tools")
+			lchk.call("not in the top view: no free-look button", not fbtn.is_visible_in_tree())
+			lchk.call("the eye is not in the tool column (22 Nov: on the free-look card)", not tools_c.is_ancestor_of(fbtn))
 			(hud.get("_btn_views")[2] as Button).pressed.emit()
 			await _wait(0.8)
-			lchk.call("top view: the free-look button is there", fbtn.visible)
+			lchk.call("top view: the free-look card shows just the eye", fbtn.is_visible_in_tree() and not hud.free_look_button("plus").is_visible_in_tree())
+			await _shot(dir, "freelook_closed")
+			var eye_at := fbtn.get_global_rect().position
 			fbtn.pressed.emit()
 			await _wait(0.3)
 			var panel: Control = hud.get("_fl_panel")
-			lchk.call("free look on: its buttons show", stage.free_look and panel.visible)
+			lchk.call("free look on: its buttons show", stage.free_look and panel.visible and hud.free_look_button("plus").is_visible_in_tree())
+			lchk.call("... and the eye stays where it was", fbtn.get_global_rect().position.distance_to(eye_at) < 2.0, str(fbtn.get_global_rect().position - eye_at))
 			lchk.call("... and the cue and its controls are put away (they sat where the buttons are)", not game.control.enabled)
 			var d0: float = stage.get("_want_dist")
 			var zin: Button = hud.free_look_button("plus")
@@ -5051,13 +5147,13 @@ func _tour_step(dir: String, s: String) -> void:
 			await _shot(dir, "freelook_panel")
 			fbtn.pressed.emit()
 			await _wait(0.3)
-			lchk.call("the eye again: free look off, its buttons go", not stage.free_look and not panel.visible)
+			lchk.call("the eye again: free look off, its buttons go (the eye stays)", not stage.free_look and panel.visible and not hud.free_look_button("plus").is_visible_in_tree() and fbtn.is_visible_in_tree())
 			lchk.call("... and the cue is back", game.control.enabled)
 			fbtn.pressed.emit()
 			await _wait(0.2)
 			(hud.get("_btn_views")[0] as Button).pressed.emit()
 			await _wait(0.3)
-			lchk.call("another view: free look ends and the button goes", not stage.free_look and not fbtn.visible and not panel.visible)
+			lchk.call("another view: free look ends and the card goes", not stage.free_look and not fbtn.is_visible_in_tree() and not panel.visible)
 			_end_match()
 			go("menu")
 			print("FREELOOK %s %s" % ["PASS" if lbad.is_empty() else "FAIL", str(lbad)])

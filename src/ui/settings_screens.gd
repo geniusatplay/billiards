@@ -280,9 +280,8 @@ class SettingsScreen extends MenuScreens.Screen:
 			pw.pressed.connect(func(): router.call("place_world_again"))
 			now.add_child(pw)
 		w.add_child(now)
-		var scenes := Catalog.SCENES.filter(func(e): return e.get("ready", true) and Game.owns("scene", str(e["id"])))
-		var bg := S.choice(w, "World background (Play in place)", "scene", Catalog.ids(scenes), Catalog.names(scenes))
-		bg.name = "WorldBackground"
+		# (no "World background" here since 22 Nov: Play in place is the scene from Choose Gear, Randy: "scenes can be
+		# chosen at equip gear")
 		S.big_slider(w, "size", "World size", Game.world_size(), Game.WORLD_MIN, Game.WORLD_MAX, 0.01,
 			func(x: float) -> String: return L.t("Life-size") if x >= 0.995 else "%d%%" % roundi(x * 100.0),
 			func(x: float): Game.set_world_size(x), ["Mini", "Life-size"])

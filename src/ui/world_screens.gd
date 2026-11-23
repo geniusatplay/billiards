@@ -131,7 +131,7 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 		var ar_ok := _ar_possible()
 		row.add_child(_card("ar", "place", "In front of me", "Augmented reality: the table stands in your room through the camera. Walk around it, lean in, crouch down.",
 			"Uses the camera", "Place in front of me", ar_ok, _choose_ar))
-		row.add_child(_card("studio", "cube", "Play in place", "No camera: the table in its own world, wherever you are. Pick the world in Settings → World background.",
+		row.add_child(_card("studio", "cube", "Play in place", "No camera: the table in its own world, wherever you are. The world is the scene you picked in Choose Gear.",
 			"No camera", "Play in place", true, _choose_studio))
 		UIKit.fade_in(col, 0.3, 24)
 		# placing (hidden until "Place in front of me")
@@ -190,6 +190,17 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		d.custom_minimum_size = Vector2(540, 0)
 		v.add_child(d)
+		if id == "studio":
+			# Play in place is always the scene from Choose Gear (Randy, 22 Nov): its name (a proper name: English)
+			var sc := UIKit.hbox(10)
+			sc.name = "WorldScene"
+			sc.add_child(IconGlyph.make("globe", 34, UIKit.SKY))
+			var sn := UIKit.label(str(Game.scene_style().get("name", "")), "AccentLabel")
+			sn.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			sn.add_theme_color_override("font_color", UIKit.SKY)
+			sn.name = "WorldSceneName"
+			sc.add_child(sn)
+			v.add_child(sc)
 		v.add_child(UIKit.spacer(false))
 		var go := UIKit.button(action, "PrimaryButton" if id == "ar" or not _ar_possible() else "", "camera" if id == "ar" else "play")
 		go.name = "WorldGo_" + id

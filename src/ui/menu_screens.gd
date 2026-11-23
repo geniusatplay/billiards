@@ -90,6 +90,7 @@ class MainMenu extends Screen:
 		brand.add_child(lg)
 		left.add_child(brand)
 		var title := UIKit.label(Game.TITLE_LINES[0], "TitleLabel")
+		title.name = "MenuTitle"
 		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED    # (the name)
 		title.add_theme_constant_override("outline_size", 0)
 		left.add_child(title)
@@ -404,6 +405,13 @@ class MainMenu extends Screen:
 	## Languages with long words make the button column wide. It must never run into the game's name on the
 	## left, so when it would, the button text is made smaller until the column fits beside it.
 	func _fit_column(left: Control, col: Control) -> void:
+		# the game's name gives a little first, so there is always a clear gap beside the buttons (22 Nov: the longer
+		# name "EMERALD ONLINE" came within 22 px of the Tamil buttons)
+		var mt := left.find_child("MenuTitle", false, false) as Label
+		if mt:
+			# (the column keeps its width, so the gear card and the XP bar under the name stay as they are)
+			left.custom_minimum_size.x = maxf(left.custom_minimum_size.x, left.get_combined_minimum_size().x)
+			_fit_line(mt, size.x - 100.0 - col.get_combined_minimum_size().x - left.position.x - 72.0, 64)
 		var room := size.x - 100.0 - (left.position.x + left.get_combined_minimum_size().x) - 48.0
 		var need := col.get_combined_minimum_size().x
 		if need <= room or room < 300.0:
@@ -719,7 +727,7 @@ class HelpScreen extends Screen:
 		header("How to Play")
 		content(170, 200)
 		var sections := [
-			["Placing the world", "Place world (on the main menu, and on the screen before a match) offers two ways. In front of me: point the phone at the floor or a desk and sweep it slowly until the table appears, then tap Place. It stays put in your room: walk all the way around it, lean in, crouch. Settings → World sets its size and height. Play in place: no camera, the table in its own world (Settings → World background).\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in place instead."],
+			["Placing the world", "Place world (on the main menu, and on the screen before a match) offers two ways. In front of me: point the phone at the floor or a desk and sweep it slowly until the table appears, then tap Place. It stays put in your room: walk all the way around it, lean in, crouch. Settings → World sets its size and height. Play in place: no camera, the table in its own world (the scene you picked in Choose Gear).\nAR uses Google ARCore (Google Play Services for AR). If AR can't start, the game tells you why and what to do; you can always play in place instead."],
 			["Aiming", "Like real pool, only the cue shows your aim. If you want help, Settings → Aim guide adds a short line, a ghost ball, or a full prediction."],
 			["Spin & elevation", "Drag the dot on the cue-ball pad: low = draw (comes back), high = follow, sides = english (changes rebound angles; the cue ball squirts slightly away from the side you hit).\nThe elevation slider raises the cue butt: 5-15° with side spin swerves the ball, 25-50° with a firm stroke makes the cue ball JUMP over blockers, and 60-75° with side spin bends it around balls (massé). Hit a jump too hard and the ball flies off the table."],
 			["Balls off the table", "A ball that leaves the table is a foul. Object balls are re-spotted on the foot spot; the cue ball gives your opponent ball in hand; jumping the 8 off the table loses the game."],

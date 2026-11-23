@@ -22,6 +22,21 @@ func set_icon(p_icon: String) -> void:
 	queue_redraw()
 
 
+## An arc from a0 to a1 (radians, screen angles) ending in an arrowhead that points the way the arc runs; the line
+## stops at the head's back so no line pokes out past it.
+func _arc_arrow(cen: Vector2, r: float, a0: float, a1: float, w: float, c: Color, s: float) -> void:
+	var dir := signf(a1 - a0)
+	var head := s * 0.2                       # the head's length along the arc
+	var back := a1 - dir * (head * 0.55) / r   # where the line stops (the head's back)
+	draw_arc(cen, r, a0, back, 32, c, w, true)
+	var p := cen + Vector2(cos(a1), sin(a1)) * r
+	var t := Vector2(-sin(a1), cos(a1)) * dir         # the way the arc runs at its end
+	var n := Vector2(cos(a1), sin(a1))
+	var base := p - t * head * 0.6
+	var half := s * 0.13
+	draw_colored_polygon(PackedVector2Array([p + t * head * 0.4, base + n * half, base - n * half]), c)
+
+
 func _draw() -> void:
 	var s := minf(size.x, size.y)
 	var o := (size - Vector2(s, s)) * 0.5
@@ -93,13 +108,27 @@ func _draw() -> void:
 			for q in [Vector2(0.12, 0.26), Vector2(0.88, 0.26), Vector2(0.12, 0.74), Vector2(0.88, 0.74), Vector2(0.5, 0.26), Vector2(0.5, 0.74)]:
 				draw_circle(P.call(q.x, q.y), s * 0.06, c)
 		"refresh", "recenter":
-			draw_arc(P.call(0.5, 0.52), s * 0.32, deg_to_rad(-60), deg_to_rad(250), 32, c, w, true)
-			var tip: Vector2 = P.call(0.5, 0.52) + Vector2(cos(deg_to_rad(-60)), sin(deg_to_rad(-60))) * s * 0.32
-			draw_colored_polygon(PackedVector2Array([tip + Vector2(-s * 0.14, -s * 0.05), tip + Vector2(s * 0.06, s * 0.14), tip + Vector2(s * 0.08, -s * 0.12)]), c)
+			# a clockwise circle, its arrowhead on the end, pointing the way it turns (22 Nov: the old head sat off the
+			# line, Randy: "the arrow on the rotate thing doesnt look right")
+			_arc_arrow(P.call(0.5, 0.52), s * 0.3, deg_to_rad(-60), deg_to_rad(235), w, c, s)
 		"undo":
-			draw_arc(P.call(0.52, 0.56), s * 0.3, deg_to_rad(200), deg_to_rad(400), 28, c, w, true)
-			var t0: Vector2 = P.call(0.52, 0.56) + Vector2(cos(deg_to_rad(200)), sin(deg_to_rad(200))) * s * 0.3
-			draw_colored_polygon(PackedVector2Array([t0 + Vector2(-s * 0.12, -s * 0.06), t0 + Vector2(s * 0.1, -s * 0.12), t0 + Vector2(s * 0.02, s * 0.12)]), c)
+			_arc_arrow(P.call(0.52, 0.56), s * 0.3, deg_to_rad(40), deg_to_rad(-170), w, c, s)
+		"rot_left", "rot_right":
+			# turn the table: the circle arrow (Randy, 22 Nov, of the redrawn one: "I like this"), clockwise for
+			# right, its mirror image for left
+			if icon == "rot_right":
+				_arc_arrow(P.call(0.5, 0.52), s * 0.3, deg_to_rad(-60), deg_to_rad(235), w, c, s)
+			else:
+				_arc_arrow(P.call(0.5, 0.52), s * 0.3, deg_to_rad(240), deg_to_rad(-55), w, c, s)
+		"cue_ball":
+			# the white ball (the button that moves it: Randy, 22 Nov, "please make the icon look like a cue ball"):
+			# a white ball, shaded at the bottom right, with a small red spot
+			var cb: Vector2 = P.call(0.5, 0.5)
+			var rb := s * 0.38
+			draw_circle(cb, rb, c.darkened(0.42), true, -1.0, true)
+			draw_circle(cb + Vector2(-0.03, -0.03) * s, rb * 0.86, c, true, -1.0, true)
+			draw_circle(cb + Vector2(-0.11, -0.12) * s, s * 0.07, Color(1, 1, 1, 0.95), true, -1.0, true)
+			draw_circle(cb + Vector2(0.07, 0.07) * s, s * 0.065, Color("e12d2d"), true, -1.0, true)
 		"star", "star_empty":
 			var sp := PackedVector2Array()
 			for i in 10:

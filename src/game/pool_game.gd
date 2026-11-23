@@ -351,6 +351,14 @@ func cue_ball_pos() -> Vector2:
 
 
 func _set_state(s: int) -> void:
+	if s == State.BALL_IN_HAND and is_human_turn() and stage.view == Stage.View.AIM:
+		# the aim camera follows the cue ball: moving the ball from it would move the view under the finger, so the
+		# overview while placing, and the aim view again once it is placed (as for a shot: restore_aim_view)
+		stage.set_view(Stage.View.OVERVIEW)
+		stage.set_meta("restore_aim_view", true)
+	elif s == State.AIM and stage.has_meta("restore_aim_view") and state == State.BALL_IN_HAND:
+		stage.remove_meta("restore_aim_view")
+		stage.set_view(Stage.View.AIM)
 	state = s
 	FpsCounter.phase = "match " + str(State.keys()[s]).to_lower()
 	if control:
@@ -364,7 +372,7 @@ func _start_turn(first := false) -> void:
 	var info := {"first": first, "ball_in_hand": rules.ball_in_hand and mode == "versus",
 		"changed": current != _last_turn_player, "group": rules.groups[current]}
 	if sim.st[cue_index()] == PoolSim.ST_POCKETED:
-		_respawn_cue(Rack.head_spot(sim))
+		_respawn_cue(Rack.break_spot(sim))
 	control.reset_for_turn(_default_aim())
 	control.offset = Vector2.ZERO
 	control.elevation = 0.0
@@ -839,7 +847,7 @@ func _resolve_practice() -> void:
 	_respot_jumped(true)
 	if sim.st[cue_index()] == PoolSim.ST_POCKETED:
 		message.emit("Cue ball off the table — back on the table." if 0 in jumped_this_shot else "Scratch — cue ball back on the table.", "warn")
-		_respawn_cue(Rack.head_spot(sim))
+		_respawn_cue(Rack.break_spot(sim))
 	elif not jumped_this_shot.is_empty():
 		message.emit("Ball off the table — re-spotted.", "warn")
 	var left := sim.balls_on_table(PoolSim.K_OBJECT).size() + sim.balls_on_table(PoolSim.K_EIGHT).size()
@@ -880,7 +888,7 @@ func _resolve_versus() -> void:
 	if r.get("respot_eight", false):
 		_respot_eight()
 	if not r["game_over"] and sim.st[cue_index()] == PoolSim.ST_POCKETED:
-		_respawn_cue(Rack.head_spot(sim))
+		_respawn_cue(Rack.break_spot(sim))
 	if remote:
 		# the two phones normally agree to the last digit; if they ever do not, the shooter's phone is right
 		var auth := _remote_result
@@ -1008,7 +1016,7 @@ func _legal_cue_spot(p: Vector2) -> Variant:
 	var lim := Vector2(sim.table.a - sim.R, sim.table.b - sim.R)
 	var hi := lim
 	if break_placement():
-		hi.x = Rack.head_spot(sim).x   # the break: on or behind the head string
+		hi.x = Rack.kitchen_limit(sim)   # the break: behind the head string (the line itself is not behind it)
 	var q := p.clamp(-lim, hi)
 	for k in 12:
 		if sim.is_spot_free(q, c):

@@ -17,6 +17,19 @@ static func head_spot(s: PoolSim) -> Vector2:
 	return Vector2(-s.table.a * 0.5, 0.0)
 
 
+## Where the cue ball starts for the break (and comes back after a scratch): one ball's width behind the head
+## string. The rules' "behind the head string" does not include the line itself (WPA / BCA general rules: "the area
+## behind the head string does not include the head string"), so the head spot on the line was not a legal place to
+## break from (Randy, 22 Nov: "make sure their starting ball placement is a legal starting placement").
+static func break_spot(s: PoolSim) -> Vector2:
+	return head_spot(s) - Vector2(2.0 * s.R, 0.0)
+
+
+## The furthest the cue ball's centre may go when it is placed for the break: just behind the head string.
+static func kitchen_limit(s: PoolSim) -> float:
+	return head_spot(s).x - 0.001
+
+
 ## Triangle slot positions (15), apex on the foot spot, rows growing toward the foot rail.
 static func triangle_slots(s: PoolSim) -> PackedVector2Array:
 	var R := s.R
@@ -34,7 +47,7 @@ static func rack_eight_ball(s: PoolSim, seed_v := 0, cue_pos := Vector2.INF) -> 
 	s.clear_balls()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_v
-	s.add_ball(head_spot(s) if cue_pos == Vector2.INF else cue_pos, 0, PoolSim.K_CUE)
+	s.add_ball(break_spot(s) if cue_pos == Vector2.INF else cue_pos, 0, PoolSim.K_CUE)
 	var slots := triangle_slots(s)
 	var assign: Array = []
 	assign.resize(15)
