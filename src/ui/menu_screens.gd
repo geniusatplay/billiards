@@ -593,14 +593,47 @@ class ControlsScreen extends Screen:
 
 ## ------------------------------------------------------------ play online (matchmaking arrives with the game server)
 class OnlineScreen extends Screen:
-	## v1.1.15: after this long without an opponent, the match starts against a stand-in (see FillIn)
-	const SEARCH_SECONDS := 60.0
-	var search_seconds := SEARCH_SECONDS      # (tests shorten it)
+	## Nobody came: the match is against a stand-in (see FillIn), found after a random 45-60 s of searching (Randy, 24 Nov
+	## 2026: "please make the ai opponent fill in between 45 & 60 seconds so it looks natural")
+	const STANDIN_AFTER := Vector2(45.0, 60.0)
+	## The ready-up between finding an opponent and the match (Randy, 24 Nov 2026: "when i am not ready yet there should
+	## be a green ready up button ... when I am ready & the opponent isnt, it should say: Waiting for opponent to be ready
+	## (seconds until match start), make it 20 seconds until it auto starts"). The match starts when both players are
+	## ready, or by itself this long after the opponent was found.
+	const READY_SECONDS := 20.0
+	## A stand-in taps Ready 1-3 s after the player does ("also add a delay between 1 and 3 seconds"). Left waiting, it
+	## readies by itself after a while, as people often do first.
+	const STANDIN_READY_DELAY := Vector2(1.0, 3.0)
+	const STANDIN_SELF_READY := Vector2(2.5, 12.0)
+	const OPP_GONE := 12.0           # the other phone silent this long during the ready-up: it has gone
+	var standin_after := STANDIN_AFTER        # (tests shorten these)
+	var ready_seconds := READY_SECONDS
 	var _status: Label
+	var _info: Label
 	var _find: Button
+	var _row: Control
 	var _searching := false
+	var _gen := 0                    # each search's number (a search cancelled and started again: the old one stops)
 	var _t0 := 0
+	var _give_up := 60.0
+	var _note := ""                  # a line kept above the search count (the opponent left the ready-up)
 	var _world_b: Button
+	# the ready-up
+	var _ready_ui: VBoxContainer
+	var _opp_name: Label
+	var _opp_level: Label
+	var _opp_state: Label
+	var _opp_tick: IconGlyph
+	var _ready_btn: Button
+	var _wait_lbl: Label
+	var _starts_lbl: Label
+	var _readying := false
+	var _me_ready := false
+	var _opp_ready := false
+	var _deadline := 0
+	var _m: NetMatch = null
+	var _fill := {}
+	var _si_ready_at := -1
 
 	func _ready() -> void:
 		scrim(0.6)
@@ -615,14 +648,15 @@ class OnlineScreen extends Screen:
 		var top := UIKit.hbox(18)
 		top.add_child(IconGlyph.make("globe", 72, UIKit.EMERALD))
 		_status = UIKit.label("Play 8-ball against another player.", "H3Label")
+		_status.name = "OnlineStatus"
 		_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_status.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		top.add_child(_status)
 		v.add_child(top)
-		var info := UIKit.label("You are matched with the next player who is looking for a game. Online matches give full XP.", "MutedLabel")
-		info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		v.add_child(info)
+		_info = UIKit.label("You are matched with the next player who is looking for a game. Online matches give full XP.", "MutedLabel")
+		_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(_info)
 		body.add_child(card)
 		var gap := Control.new()
 		gap.custom_minimum_size = Vector2(0, 14)
@@ -644,6 +678,7 @@ class OnlineScreen extends Screen:
 			_status.text = "Create an account or log in to play online."
 			_find.text = "Create account or log in"
 		body.add_child(_find)
+		_build_ready_up()
 		var gap2 := Control.new()
 		gap2.custom_minimum_size = Vector2(0, 26)
 		body.add_child(gap2)
@@ -659,28 +694,92 @@ class OnlineScreen extends Screen:
 		local.pressed.connect(func(): router.call("go", "pass_play", true))
 		row.add_child(local)
 		body.add_child(row)
+		_row = row
+
+	## The opponent (name, level, ready or not), the Ready button, and the lines under it.
+	func _build_ready_up() -> void:
+		_ready_ui = UIKit.vbox(20)
+		_ready_ui.name = "ReadyUp"
+		_ready_ui.visible = false
+		var oc := UIKit.panel("Card")
+		oc.name = "ReadyOpponent"
+		var oh := UIKit.hbox(22)
+		oc.add_child(oh)
+		var av := IconGlyph.make("user", 72, UIKit.SKY)
+		av.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		oh.add_child(av)
+		var ov := UIKit.vbox(2)
+		ov.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ov.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_opp_name = UIKit.label("", "H2Label")
+		_opp_name.name = "ReadyOppName"
+		_opp_name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED     # (a username is never translated)
+		_opp_name.clip_text = true
+		ov.add_child(_opp_name)
+		_opp_level = UIKit.label("", "MutedLabel")
+		_opp_level.name = "ReadyOppLevel"
+		ov.add_child(_opp_level)
+		oh.add_child(ov)
+		var sh := UIKit.hbox(10)
+		sh.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_opp_tick = IconGlyph.make("check", 40, UIKit.EMERALD)
+		_opp_tick.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sh.add_child(_opp_tick)
+		_opp_state = UIKit.label("Not ready yet", "H3Label")
+		_opp_state.name = "ReadyOppState"
+		_opp_state.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sh.add_child(_opp_state)
+		oh.add_child(sh)
+		_ready_ui.add_child(oc)
+		var gap := Control.new()
+		gap.custom_minimum_size = Vector2(0, 8)
+		_ready_ui.add_child(gap)
+		_ready_btn = UIKit.button("Ready", "ReadyButton", "check", 560)
+		_ready_btn.name = "ReadyButton"
+		_ready_btn.custom_minimum_size.y = 118
+		_ready_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_ready_btn.pressed.connect(_press_ready)
+		_ready_ui.add_child(_ready_btn)
+		_wait_lbl = UIKit.label("", "H2Label", HORIZONTAL_ALIGNMENT_CENTER)
+		_wait_lbl.name = "ReadyWaiting"
+		_wait_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_wait_lbl.add_theme_color_override("font_color", Color("c8ffe6"))
+		_ready_ui.add_child(_wait_lbl)
+		_starts_lbl = UIKit.label("", "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
+		_starts_lbl.name = "ReadyStarts"
+		_starts_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_ready_ui.add_child(_starts_lbl)
+		body.add_child(_ready_ui)
 
 	func _say(text: String) -> void:
 		_status.text = text
 
-	func _search() -> void:
+	func _search(resume := false) -> void:
 		_searching = true
+		_gen += 1
+		var gen := _gen
 		_find.text = "Cancel"
 		_find.icon = null
 		if _world_b:
 			_world_b.disabled = true       # (the world can't change while looking for a match)
-		_say("Checking your connection…")
+		_say(_note if resume else "Checking your connection…")
 		if not await Net.ensure_player():
-			return _failed()
+			if gen == _gen:
+				_failed()
+			return
 		var ping: int = await Net.measure_ping()
-		if not is_inside_tree() or not _searching:
+		if not is_inside_tree() or not _searching or gen != _gen:
 			return
 		if ping >= 9999:
 			return _failed()
-		_t0 = Time.get_ticks_msec()
-		# within the minute, but not always on the dot (a stand-in found at exactly 60 s every time would give it away)
-		var give_up := search_seconds * randf_range(0.7, 1.0)
-		while _searching and is_inside_tree():
+		if not resume:
+			_t0 = Time.get_ticks_msec()
+			# 45-60 s, never the same: a stand-in found at the same moment every time would give it away
+			_give_up = randf_range(standin_after.x, standin_after.y)
+		else:
+			# (the opponent left the ready-up: searching goes on, with a little time for someone else to come)
+			_give_up = maxf(_give_up, (Time.get_ticks_msec() - _t0) / 1000.0 + randf_range(8.0, 15.0))
+		while _searching and is_inside_tree() and gen == _gen:
 			var body_d := Net.creds()
 			body_d["ping"] = ping
 			body_d["ver"] = Net.ONLINE_VERSION
@@ -688,7 +787,7 @@ class OnlineScreen extends Screen:
 			body_d["info"] = {"name": Net.username(), "level": Game.level(), "cue": str(Game.get_s("cue_skin")),
 				"table": str(Game.get_s("table_style")), "balls": str(Game.get_s("ball_set"))}
 			var r: Dictionary = await Net.api("queue", body_d)
-			if not is_inside_tree() or not _searching:
+			if not is_inside_tree() or not _searching or gen != _gen:
 				return
 			if str(r.get("error", "")) == "need_name":
 				_cancel()
@@ -698,16 +797,16 @@ class OnlineScreen extends Screen:
 			if not r.get("ok", false):
 				return _failed()
 			if r.has("match"):
-				_searching = false
 				var m := NetMatch.from_reply(r)
 				Net.add_child(m)
-				Sfx.play("turn_chime", 0.9)
-				router.call("start_match", {"mode": "versus", "online": true, "net": m})
+				_begin_ready(m, {})
 				return
 			var waited := (Time.get_ticks_msec() - _t0) / 1000.0
-			if waited >= give_up:
+			if waited >= _give_up:
 				return _stand_in()
 			var line := L.t("Looking for an opponent… %d s") % int(waited)
+			if _note != "":
+				line = L.t(_note) + "\n" + line
 			if int(r.get("other_ver", 0)) > 0:
 				# someone is looking too, on a version that can't play this one (v1.1.13: was the reason two
 				# phones never met)
@@ -715,16 +814,126 @@ class OnlineScreen extends Screen:
 			_say(line)
 			await get_tree().create_timer(1.5).timeout
 
-	## Nobody came within a minute: a match against a stand-in opponent, shown and paid like an online one.
+	## Nobody came: a match against a stand-in opponent, shown and paid like an online one (the ready-up too).
 	func _stand_in() -> void:
 		_searching = false
 		Net.api("leave", Net.creds(), "poll")
-		var f := FillIn.make(Net.username(), Game.level())
+		_begin_ready(null, FillIn.make(Net.username(), Game.level()))
+
+	## An opponent was found (a player: `m`; a stand-in: `fill`): the ready-up.
+	func _begin_ready(m: NetMatch, fill: Dictionary) -> void:
+		_searching = false
+		_readying = true
+		_me_ready = false
+		_opp_ready = false
+		_m = m
+		_fill = fill
+		_note = ""
+		_deadline = Time.get_ticks_msec() + int(ready_seconds * 1000.0)
+		var nm := ""
+		var lvl := 1
+		if m:
+			m.fast = true          # (their Ready shows within half a second)
+			nm = str(m.opp.get("name", "Player"))
+			lvl = int(m.opp.get("level", 1))
+			_si_ready_at = -1
+		else:
+			nm = str(fill.get("name", "Player"))
+			lvl = int(fill.get("level", 1))
+			_si_ready_at = Time.get_ticks_msec() + int(randf_range(STANDIN_SELF_READY.x, STANDIN_SELF_READY.y) * 1000.0)
+		_opp_name.text = nm
+		_opp_level.text = L.t("LEVEL %d") % maxi(0, lvl)
+		_say("Opponent found!")
+		_info.visible = false
+		_find.visible = false
+		_row.visible = false
+		_ready_ui.visible = true
 		Sfx.play("turn_chime", 0.9)
-		router.call("start_match", {"mode": "versus", "vs_ai": true, "ai_level": int(f["ai_level"]), "fill_in": f})
+		_show_ready()
+
+	func _press_ready() -> void:
+		if not _readying or _me_ready:
+			return
+		_me_ready = true
+		if _m:
+			_m.send("ready", {})
+		elif not _opp_ready:
+			# the stand-in answers a moment later, as a person would
+			_si_ready_at = Time.get_ticks_msec() + int(randf_range(STANDIN_READY_DELAY.x, STANDIN_READY_DELAY.y) * 1000.0)
+		_show_ready()
+
+	func _show_ready() -> void:
+		var left := maxi(0, ceili((_deadline - Time.get_ticks_msec()) / 1000.0))
+		_ready_btn.visible = not _me_ready
+		_wait_lbl.visible = _me_ready and not _opp_ready
+		_wait_lbl.text = L.t("Waiting for opponent to be ready (%d)") % left
+		_starts_lbl.visible = not _me_ready
+		_starts_lbl.text = L.t("The match starts in %d s") % left
+		_opp_state.text = "Ready to play" if _opp_ready else "Not ready yet"
+		_opp_state.add_theme_color_override("font_color", UIKit.EMERALD if _opp_ready else UIKit.MUTED)
+		_opp_tick.visible = _opp_ready
+
+	## Seconds until the match starts by itself (tests).
+	func ready_left() -> float:
+		return (_deadline - Time.get_ticks_msec()) / 1000.0 if _readying else -1.0
+
+	var _held_at := -1
+	## Tests: the ready-up's clocks stand still while a picture is taken (one takes many seconds on the test machine).
+	func test_hold(on: bool) -> void:
+		if on and _held_at < 0:
+			_held_at = Time.get_ticks_msec()
+		elif not on and _held_at >= 0:
+			var d := Time.get_ticks_msec() - _held_at
+			_deadline += d
+			if _si_ready_at >= 0:
+				_si_ready_at += d
+			_held_at = -1
+
+	func _process(_delta: float) -> void:
+		if not _readying or _held_at >= 0:
+			return
+		var now := Time.get_ticks_msec()
+		if _m != null:
+			if not is_instance_valid(_m) or _m.take_type("cancel") > 0 or _m.over or _m.opp_seen > OPP_GONE:
+				return _opp_left()
+			if _m.take_type("ready") > 0 and not _opp_ready:
+				_opp_ready = true
+				Sfx.ui("toggle")
+		elif not _opp_ready and _si_ready_at >= 0 and now >= _si_ready_at:
+			_opp_ready = true
+			Sfx.ui("toggle")
+		if (_me_ready and _opp_ready) or now >= _deadline:
+			return _go()
+		_show_ready()
+
+	func _go() -> void:
+		_readying = false
+		var m := _m
+		_m = null
+		if m:
+			router.call("start_match", {"mode": "versus", "online": true, "net": m})
+		else:
+			router.call("start_match", {"mode": "versus", "vs_ai": true, "ai_level": int(_fill["ai_level"]), "fill_in": _fill})
+
+	## The other player left during the ready-up (or their phone went quiet): back to looking.
+	func _opp_left() -> void:
+		_readying = false
+		if is_instance_valid(_m):
+			_m.close()
+		_m = null
+		_end_ready_ui()
+		_note = "Your opponent left before the match. Looking for another opponent…"
+		_search(true)
+
+	func _end_ready_ui() -> void:
+		_ready_ui.visible = false
+		_info.visible = true
+		_find.visible = true
+		_row.visible = true
 
 	func _failed() -> void:
 		_searching = false
+		_note = ""
 		if _world_b:
 			_world_b.disabled = false
 		if is_inside_tree():
@@ -733,6 +942,8 @@ class OnlineScreen extends Screen:
 
 	func _cancel() -> void:
 		_searching = false
+		_gen += 1
+		_note = ""
 		if _world_b:
 			_world_b.disabled = false
 		_find.text = "Find a match"
@@ -741,6 +952,13 @@ class OnlineScreen extends Screen:
 			Net.api("leave", Net.creds())
 
 	func _exit_tree() -> void:
+		if _readying:
+			# left during the ready-up (Back): the other phone goes back to looking
+			_readying = false
+			if is_instance_valid(_m):
+				_m.send("cancel", {})
+				_m.close()
+			_m = null
 		if _searching:
 			_searching = false
 			if Net.registered():

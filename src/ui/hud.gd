@@ -265,6 +265,7 @@ func _make_player_card(i: int) -> PanelContainer:
 	var name_l := UIKit.label(game.player_names[i], "H3Label")
 	name_l.clip_text = true
 	name_l.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED  # a player's own name is never translated
+	name_l.resized.connect(_fit_name.bind(name_l))     # (usernames have up to 16 letters: a long one gets smaller)
 	var sub := UIKit.label("", "SmallLabel")
 	v.add_child(name_l)
 	v.add_child(sub)
@@ -275,6 +276,19 @@ func _make_player_card(i: int) -> PanelContainer:
 	h.add_child(clock)
 	_cards.append({"panel": p, "name": name_l, "sub": sub, "clock": clock, "dot": dot, "index": i})
 	return p
+
+
+## A long name is made smaller until it fits its card (24 Nov 2026: "Diamond_keslie" was cut to "Diamond_kesl").
+func _fit_name(l: Label) -> void:
+	if not is_instance_valid(l) or l.size.x <= 1.0:
+		return
+	var base := UIKit.theme().get_font_size("font_size", "H3Label")
+	var f := l.get_theme_font("font")
+	var px := base
+	while px > 22 and f.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, px).x > l.size.x:
+		px -= 2
+	if px != l.get_theme_font_size("font_size"):
+		l.add_theme_font_size_override("font_size", px)
 
 
 func _title_text() -> String:
@@ -295,6 +309,7 @@ func on_language_changed() -> void:
 	_info_title.text = _title_text()
 	for c in _cards:
 		(c["name"] as Label).text = game.player_names[c["index"]]
+		_fit_name(c["name"])
 	_refresh()
 	_update_hint()
 	propagate_call("queue_redraw")

@@ -107,6 +107,20 @@ func take() -> Array:
 	return a
 
 
+## Takes only the other player's events of one type (the ready-up before the match, 24 Nov 2026: "ready",
+## "cancel"); everything else stays for the match. How many there were.
+func take_type(type: String) -> int:
+	var n := 0
+	var keep := []
+	for e in _in:
+		if str(e["type"]) == type:
+			n += 1
+		else:
+			keep.append(e)
+	_in = keep
+	return n
+
+
 func _process(delta: float) -> void:
 	silent += delta
 	_t -= delta

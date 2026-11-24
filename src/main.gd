@@ -1758,7 +1758,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -2154,14 +2154,17 @@ func _tour_step(dir: String, s: String) -> void:
 			var ai_before := var_to_str([Game.stats.get("games_vs_ai", []), Game.stats.get("wins_vs_ai", [])])
 			go("online", true)
 			await _wait(0.4)
-			_screen.set("search_seconds", 2.0)
+			_screen.set("standin_after", Vector2(1.5, 2.0))
 			_screen.call("_search")
 			var waited := 0.0
-			while game == null and waited < 20.0:
+			while game == null and waited < 30.0:
 				srv.now = Time.get_ticks_msec() / 1000.0
+				# (24 Nov 2026: the ready-up first)
+				if _screen is MenuScreens.OnlineScreen and bool(_screen.get("_readying")) and not bool(_screen.get("_me_ready")):
+					_screen.call("_press_ready")
 				await _wait(0.2)
 				waited += 0.2
-			res.append(["nobody else searching -> a match starts after the search time (%.1f s)" % waited, game != null and not game.fill_in.is_empty() and not game.online])
+			res.append(["nobody else searching -> a match starts after the search time and the ready-up (%.1f s)" % waited, game != null and not game.fill_in.is_empty() and not game.online])
 			if game != null:
 				await _wait(1.5)
 				var nm := str(game.player_names[1])
@@ -2208,6 +2211,213 @@ func _tour_step(dir: String, s: String) -> void:
 				all_ok = all_ok and r[1]
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("STANDIN %s" % ("PASS" if all_ok else "FAIL"))
+		"readyup":
+			# 24 Nov 2026 (Randy): the stand-in comes after 45-60 s of searching; a ready-up between finding an opponent
+			# and the match: a green gradient Ready button with a light green outline, "Waiting for opponent to be ready
+			# (N)", the match starting by itself 20 s after the opponent was found; a stand-in tapping Ready 1-3 s after
+			# the player. Then the same with a real player (tests/online_ghost.gd): they ready first, they leave the
+			# ready-up (back to searching), this player leaves it (they are told).
+			var srv = load("res://tests/fake_server.gd").new()
+			var Ghost = load("res://tests/online_ghost.gd")
+			Net.fake = srv
+			_end_match()
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			Game.progress = Game.fresh_progress()
+			Game.set_s("ar_mode", "studio")
+			await Net.sign_up("readyup@example.com", "secret1", "Ready Tester")
+			var res := []
+			var chk := func(what: String, good: bool, info: String):
+				res.append([what + ("  " + info if info != "" else ""), good])
+			var scr_of := func() -> Control:
+				return _screen if _screen is MenuScreens.OnlineScreen else null
+			var wait_ready := func(limit: float, tick: Callable = Callable()) -> bool:
+				var w := 0.0
+				while w < limit:
+					srv.now = Time.get_ticks_msec() / 1000.0
+					if tick.is_valid():
+						tick.call()
+					var s0: Control = scr_of.call()
+					if s0 and bool(s0.get("_readying")):
+						return true
+					await _wait(0.1)
+					w += 0.1
+				return false
+			# --- the search time: 45-60 s, different every time
+			_stack.clear()
+			go("online")
+			await _wait(0.4)
+			var gives := []
+			for k in 6:
+				_screen.set("_give_up", -1.0)
+				_screen.call("_search")
+				var w0 := 0.0
+				while float(_screen.get("_give_up")) < 0.0 and w0 < 5.0:
+					await _wait(0.1)
+					w0 += 0.1
+				gives.append(snappedf(float(_screen.get("_give_up")), 0.1))
+				_screen.call("_cancel")
+				await _wait(0.2)
+			var uniq := {}
+			for x in gives:
+				uniq[x] = true
+			chk.call("a stand-in comes after 45-60 s of searching, never the same", gives.all(func(x): return x >= 45.0 and x <= 60.0) and gives.size() == 6 and uniq.size() == 6, str(gives))
+			# --- a stand-in: the ready-up
+			_screen.set("standin_after", Vector2(1.0, 1.5))
+			_screen.call("_search")
+			var got: bool = await wait_ready.call(20.0)
+			var sc: Control = scr_of.call()
+			chk.call("nobody came -> 'Opponent found!' and the ready-up", got and sc != null and str((sc.find_child("OnlineStatus", true, false) as Label).text) == "Opponent found!", "")
+			if got:
+				sc.call("test_hold", true)
+				var on: Label = sc.find_child("ReadyOppName", true, false)
+				var ol: Label = sc.find_child("ReadyOppLevel", true, false)
+				var ost: Label = sc.find_child("ReadyOppState", true, false)
+				var rb: Button = sc.find_child("ReadyButton", true, false)
+				var stl: Label = sc.find_child("ReadyStarts", true, false)
+				var fl: Dictionary = sc.get("_fill")
+				chk.call("the stand-in's name and level, as a player's (%s, %s), not ready yet" % [on.text, ol.text], on.text == str(fl.get("name", "?")) and not "CPU" in on.text.to_upper() and ol.text == L.t("LEVEL %d") % int(fl.get("level", 0)) and ost.text == "Not ready yet", "")
+				var sb := rb.get_theme_stylebox("normal")
+				chk.call("the Ready button: green, a lighter green gradient, a light green outline", rb.is_visible_in_tree() and rb.text == "Ready" and sb is GradientBox
+					and (sb as GradientBox).top.v > (sb as GradientBox).bottom.v and (sb as GradientBox).top.g > 0.8 and (sb as GradientBox).border > 0.0 and (sb as GradientBox).border_color.g > 0.9,
+					"%s -> %s, outline %s" % [str((sb as GradientBox).top.to_html(false)) if sb is GradientBox else "?", str((sb as GradientBox).bottom.to_html(false)) if sb is GradientBox else "", str((sb as GradientBox).border_color.to_html(false)) if sb is GradientBox else ""])
+				chk.call("not ready: 'The match starts in 20 s'", stl.is_visible_in_tree() and stl.text == L.t("The match starts in %d s") % 20, stl.text)
+				await _shot(dir, "ready_1_found")
+				sc.call("test_hold", false)
+				var t_press := Time.get_ticks_msec()
+				rb.pressed.emit()
+				var si_at := int(sc.get("_si_ready_at"))
+				var delay := (si_at - t_press) / 1000.0
+				chk.call("the stand-in taps Ready 1-3 s after the player (%.2f s)" % delay, delay >= 0.99 and delay <= 3.01, "")
+				sc.call("test_hold", true)
+				var wl: Label = sc.find_child("ReadyWaiting", true, false)
+				chk.call("ready -> the button goes, 'Waiting for opponent to be ready (N)'", not rb.is_visible_in_tree() and wl.is_visible_in_tree()
+					and (wl.text == L.t("Waiting for opponent to be ready (%d)") % 20 or wl.text == L.t("Waiting for opponent to be ready (%d)") % 19), wl.text)
+				await _shot(dir, "ready_2_waiting")
+				sc.call("test_hold", false)
+				var nm_ready := on.text
+				var w1 := 0.0
+				while game == null and w1 < 10.0:
+					await _wait(0.1)
+					w1 += 0.1
+				chk.call("then the stand-in is ready and the match starts, against the same name", game != null and not game.fill_in.is_empty() and str(game.player_names[1]) == nm_ready, str(game.player_names[1]) if game else "")
+				if game:
+					await _wait(1.0)
+					await _shot(dir, "ready_3_match")
+			_end_match()
+			# --- nobody taps Ready: the match starts by itself (the 20 s shortened to 4 here)
+			_stack.clear()
+			go("online")
+			await _wait(0.4)
+			_screen.set("standin_after", Vector2(1.0, 1.5))
+			_screen.set("ready_seconds", 4.0)
+			_screen.call("_search")
+			got = await wait_ready.call(20.0)
+			var t_found := Time.get_ticks_msec()
+			sc = scr_of.call()
+			var left0: float = float(sc.call("ready_left")) if sc else -1.0
+			var w2 := 0.0
+			while game == null and w2 < 15.0:
+				await _wait(0.1)
+				w2 += 0.1
+			var took := (Time.get_ticks_msec() - t_found) / 1000.0
+			chk.call("nobody taps Ready -> the match starts by itself when the time is up (after %.1f s; %.1f s were left)" % [took, left0], got and game != null and left0 > 3.0 and left0 <= 4.0 and took >= left0 - 0.05 and took < left0 + 3.0, "")
+			_end_match()
+			chk.call("the ready-up waits 20 s by default", MenuScreens.OnlineScreen.READY_SECONDS == 20.0 and MenuScreens.OnlineScreen.STANDIN_READY_DELAY == Vector2(1, 3)
+				and MenuScreens.OnlineScreen.STANDIN_AFTER == Vector2(45, 60), "")
+			# --- a real player who readies first
+			var ghost = Ghost.new()
+			ghost.ready_in = 0
+			ghost.join(srv, "Ghost", 9000, Net.ONLINE_VERSION)
+			_stack.clear()
+			go("online")
+			await _wait(0.4)
+			_screen.call("_search")
+			got = await wait_ready.call(20.0, func(): ghost.tick("Ghost", 9000, Net.ONLINE_VERSION))
+			sc = scr_of.call()
+			var w3 := 0.0
+			while got and sc and not bool(sc.get("_opp_ready")) and w3 < 10.0:
+				srv.now = Time.get_ticks_msec() / 1000.0
+				ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
+				await _wait(0.1)
+				w3 += 0.1
+			if got and sc:
+				sc.call("test_hold", true)
+				var ost2: Label = sc.find_child("ReadyOppState", true, false)
+				var on2: Label = sc.find_child("ReadyOppName", true, false)
+				chk.call("a player found: their username, 'Ready' when they tap it, my Ready button still there", on2.text == "Ghost" and ost2.text == "Ready to play"
+					and (sc.find_child("ReadyButton", true, false) as Button).is_visible_in_tree() and (sc.find_child("ReadyStarts", true, false) as Label).is_visible_in_tree(), "%s / %s" % [on2.text, ost2.text])
+				await _shot(dir, "ready_4_opp_ready")
+				sc.call("test_hold", false)
+				(sc.find_child("ReadyButton", true, false) as Button).pressed.emit()
+				var w4 := 0.0
+				while game == null and w4 < 5.0:
+					await _wait(0.1)
+					w4 += 0.1
+				chk.call("both ready -> the online match starts at once", game != null and game.online and w4 < 1.5, "%.1f s" % w4)
+				for k in 4:
+					srv.now = Time.get_ticks_msec() / 1000.0
+					ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
+					await _wait(0.2)
+				chk.call("the other phone was told this player is ready", ghost.readies_seen == 1, str(ghost.readies_seen))
+			else:
+				chk.call("a player found: the ready-up", false, "")
+			_end_match()
+			# --- the other player leaves the ready-up: back to searching, and the next one is found
+			var g2 = Ghost.new()
+			g2.ready_in = 3
+			g2.cancel_ready = true
+			g2.join(srv, "Leaver", 9000, Net.ONLINE_VERSION)
+			_stack.clear()
+			go("menu")
+			go("online")
+			await _wait(0.4)
+			_screen.call("_search")
+			got = await wait_ready.call(20.0, func(): g2.tick("Leaver", 9000, Net.ONLINE_VERSION))
+			sc = scr_of.call()
+			var w5 := 0.0
+			while sc and bool(sc.get("_readying")) and w5 < 10.0:
+				srv.now = Time.get_ticks_msec() / 1000.0
+				g2.tick("Leaver", 9000, Net.ONLINE_VERSION)
+				await _wait(0.1)
+				w5 += 0.1
+			var w6 := 0.0
+			while sc and w6 < 6.0 and not str((sc.find_child("OnlineStatus", true, false) as Label).text).contains(L.t("Looking for an opponent… %d s").split("…")[0]):
+				srv.now = Time.get_ticks_msec() / 1000.0
+				await _wait(0.1)
+				w6 += 0.1
+			var stt: String = str((sc.find_child("OnlineStatus", true, false) as Label).text) if sc else ""
+			chk.call("they leave the ready-up -> 'Your opponent left before the match', searching again", got and sc != null and bool(sc.get("_searching")) and not bool(sc.get("_readying"))
+				and stt.begins_with(L.t("Your opponent left before the match. Looking for another opponent…")) and (sc.find_child("ReadyUp", true, false) as Control).visible == false, stt.replace("\n", " / "))
+			if sc:
+				await _shot(dir, "ready_5_opp_left")
+			var g3 = Ghost.new()
+			g3.ready_in = -1
+			g3.join(srv, "Next One", 9000, Net.ONLINE_VERSION)
+			got = await wait_ready.call(20.0, func(): g3.tick("Next One", 9000, Net.ONLINE_VERSION))
+			sc = scr_of.call()
+			chk.call("... and the next player looking is found", got and sc != null and (sc.find_child("ReadyOppName", true, false) as Label).text == "Next One", "")
+			# --- this player leaves the ready-up (Back): the other phone is told
+			if sc:
+				back()
+				var w7 := 0.0
+				while w7 < 3.0 and g3.cancels_seen == 0:
+					srv.now = Time.get_ticks_msec() / 1000.0
+					g3.tick("Next One", 9000, Net.ONLINE_VERSION)
+					await _wait(0.1)
+					w7 += 0.1
+				chk.call("Back during the ready-up -> the other phone is told (it goes back to looking), no match here", g3.cancels_seen == 1 and game == null, str(g3.cancels_seen))
+			_end_match()
+			_stack.clear()
+			go("menu")
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.request_save()
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("READYUP %s" % ("PASS" if all_ok else "FAIL"))
 		"world":
 			# v1.1.15 (Randy: "when clicking a play option, if they havnt placed the world yet, they must do this
 			# before starting, and if they have ... the place world button should be there on the screen they click
@@ -2675,6 +2885,34 @@ func _tour_step(dir: String, s: String) -> void:
 				problems += _audit_text(code, "settings_account", _screen)
 				if pic:
 					await _shot(dir, "ll_%s_settings" % code)
+				# the ready-up (24 Nov 2026): found, not ready (the button, the countdown); ready, waiting for them; they left
+				_stack.clear()
+				go("online")
+				await _wait(0.4)
+				_screen.call("_begin_ready", null, FillIn.make("Pool Shark", 12, 5))
+				_screen.call("test_hold", true)
+				await _wait(0.3)
+				problems += _audit_text(code, "ready_found", _screen)
+				if pic:
+					await _shot(dir, "ll_%s_ready" % code)
+				_screen.call("_press_ready")
+				_screen.set("_opp_ready", false)
+				_screen.call("_show_ready")
+				await _wait(0.3)
+				problems += _audit_text(code, "ready_waiting", _screen)
+				if pic:
+					await _shot(dir, "ll_%s_ready_waiting" % code)
+				_screen.set("_opp_ready", true)
+				_screen.call("_show_ready")
+				_screen.set("_me_ready", false)
+				_screen.call("_show_ready")
+				await _wait(0.2)
+				problems += _audit_text(code, "ready_opp_ready", _screen)
+				_screen.set("_readying", false)
+				_screen.call("_end_ready_ui")
+				_screen.call("_say", L.t("Your opponent left before the match. Looking for another opponent…") + "\n" + L.t("Looking for an opponent… %d s") % 7)
+				await _wait(0.3)
+				problems += _audit_text(code, "ready_left", _screen)
 			Loc.set_language("en")
 			Net.fake = null
 			Net.set("_save_in", -1.0)
@@ -4709,8 +4947,11 @@ func _tour_step(dir: String, s: String) -> void:
 					await _shot(dir, "online_search")
 				_screen.call("_search")
 				var waited := 0.0
-				while game == null and waited < 20.0:
+				while game == null and waited < 30.0:
 					ghost.tick("Ghost", g_ping, Net.ONLINE_VERSION)
+					# (24 Nov 2026: the ready-up first; the ghost taps Ready as soon as it has the match)
+					if _screen is MenuScreens.OnlineScreen and bool(_screen.get("_readying")) and not bool(_screen.get("_me_ready")):
+						_screen.call("_press_ready")
 					await _wait(0.1)
 					waited += 0.1
 				if not say.call(game != null and game.online and game.net != null, "round %d: found an opponent and the match started" % (round_no + 1)):
@@ -4936,12 +5177,18 @@ func _tour_step(dir: String, s: String) -> void:
 			# done behind the start-of-match cover on a phone. So the turn is measured in game time.)
 			var t0 := Time.get_ticks_msec()
 			var shots_si := []
-			while game.shots_total == 0 and Time.get_ticks_msec() - t0 < 480000:
+			var at_stroke := []          # (its aiming, kept the moment it strikes: frames here can take many seconds)
+			var g_si := game
+			game.shot_fired.connect(func():
+				if at_stroke.is_empty():
+					at_stroke.append(g_si.si_last_track.duplicate())
+					at_stroke.append(g_si.shots_total))
+			while at_stroke.is_empty() and Time.get_ticks_msec() - t0 < 480000:
 				await _wait(0.25)
 				if shots_si.size() < 2 and float(game.get("_si_t")) > [3.0, 7.0][shots_si.size()]:
 					await _shot(dir, "standin_aiming_%d" % (shots_si.size() + 1))
 					shots_si.append(float(game.get("_si_t")))
-			var trk: PackedFloat32Array = game.get("_aim_buf")
+			var trk: PackedFloat32Array = at_stroke[0] if not at_stroke.is_empty() else PackedFloat32Array()
 			var moves := 0
 			var pauses := []
 			var still := 0.0
@@ -4956,7 +5203,7 @@ func _tour_step(dir: String, s: String) -> void:
 				else:
 					still += trk[k * 6] - trk[(k - 1) * 6]
 			var turn_s: float = trk[trk.size() - 6] if not trk.is_empty() else 0.0
-			lchk.call("the stand-in's break: aimed through the online playback, at a person's pace", not trk.is_empty() and game.shots_total == 1
+			lchk.call("the stand-in's break: aimed through the online playback, at a person's pace", not trk.is_empty() and int(at_stroke[1]) == 1
 				and turn_s > 2.5 and moves >= 3, "%.1f s of game time, %d separate movements, pauses %s" % [turn_s, moves, str(pauses.map(func(x): return snappedf(x, 0.1)))])
 			var cpu_words := []
 			for n in get_tree().root.find_children("*", "Label", true, false):

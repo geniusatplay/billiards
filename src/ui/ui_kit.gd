@@ -161,6 +161,20 @@ static func theme() -> Theme:
 	t.set_color("font_pressed_color", "PrimaryButton", INK)
 	t.set_font("font", "PrimaryButton", font(800))
 	t.set_font_size("font_size", "PrimaryButton", 38)
+	# Ready button (24 Nov 2026, the ready-up before an online match): green, a lighter green gradient, a light green
+	# outline (GradientBox)
+	t.add_type("ReadyButton")
+	t.set_type_variation("ReadyButton", "Button")
+	var rpad := Vector4(48, 22, 48, 22)
+	t.set_stylebox("normal", "ReadyButton", GradientBox.make(Color("8dffd2"), Color("12b97c"), Color("c8ffe6"), 3.0, 32.0, 0.22, rpad))
+	t.set_stylebox("hover", "ReadyButton", GradientBox.make(Color("a6ffdd"), Color("1ccb8a"), Color("dcfff0"), 3.0, 32.0, 0.3, rpad))
+	t.set_stylebox("pressed", "ReadyButton", GradientBox.make(Color("4fe8a8"), Color("0b8f5f"), Color("c8ffe6"), 3.0, 32.0, 0.1, rpad))
+	t.set_stylebox("hover_pressed", "ReadyButton", GradientBox.make(Color("4fe8a8"), Color("0b8f5f"), Color("c8ffe6"), 3.0, 32.0, 0.1, rpad))
+	t.set_stylebox("disabled", "ReadyButton", GradientBox.make(Color("5a7d70"), Color("2f4d42"), Color("7f9c90"), 3.0, 32.0, 0.0, rpad))
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		t.set_color(c, "ReadyButton", INK)
+	t.set_font("font", "ReadyButton", font(800))
+	t.set_font_size("font_size", "ReadyButton", 42)
 	# Ghost button
 	t.add_type("GhostButton")
 	t.set_type_variation("GhostButton", "Button")
@@ -303,7 +317,7 @@ static func button(text: String, variation := "", icon := "", min_w := 0.0) -> B
 		b.custom_minimum_size.x = min_w
 	b.focus_mode = Control.FOCUS_NONE
 	if icon != "":
-		var icol := INK if variation == "PrimaryButton" else (EMERALD if variation == "" else TEXT)
+		var icol := INK if variation in ["PrimaryButton", "ReadyButton"] else (EMERALD if variation == "" else TEXT)
 		var ic := IconGlyph.make(icon, 38, icol)
 		b.add_child(ic)
 		b.set_meta("icon_glyph", ic)

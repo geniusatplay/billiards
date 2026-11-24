@@ -27,6 +27,7 @@ var _si_t := 0.0             # seconds into the stand-in's turn
 var _si_place: Array = []    # [[seconds, position]] the cue ball is dragged through (ball in hand)
 var _si_place_i := 0
 var _si_aim_from := -1.0
+var si_last_track := PackedFloat32Array()    # the stand-in's aiming of its last stroke (tests)
 ## v1.1.15: the tutorial runs as a practice match (src/game/tutorial.gd arranges the table between objectives):
 ## no rack-cleared screen, no stats; the aim guide it asks for; the last stroke for its checks.
 var tutorial := false
@@ -807,6 +808,8 @@ func fire(yaw: float, power: float, offset: Vector2, elev: float) -> void:
 	else:
 		NetMatch.drop_path(sim)
 	_remote_shot = {}
+	if not fill_in.is_empty() and not plays_here(current):
+		si_last_track = _aim_buf
 	_aim_buf = PackedFloat32Array()
 	_aim_started = false
 	if theirs:
@@ -1155,6 +1158,10 @@ func _net_tick(_delta: float) -> void:
 				if why == "time":
 					reason = L.t("%s ran out of time") % player_names[1 - w]
 				_finish(w, reason, w == net_seat and why != "time")
+			"cancel":
+				# they left the ready-up just as this phone started the match (24 Nov 2026): as if they left it
+				rules.winner = net_seat
+				_finish(net_seat, "Your opponent left the match", true)
 			"aim":
 				# how their cue moved (only for the turn being played: older batches are dropped)
 				if not plays_here(current) and int(d.get("turn", shots_total)) == shots_total:
