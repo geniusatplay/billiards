@@ -2762,8 +2762,9 @@ func _tour_step(dir: String, s: String) -> void:
 			Net.cancel_social()
 			await _wait(0.2)
 			sp.sheet_ok = true
-			# --- iPhone: Apple's own sheet
+			# --- iPhone: Apple's own sheet (the iPhone's plugin answers yes / no as bools, Android's as 1 / 0)
 			Net.as_ios = true
+			sp.as_android = false
 			sc = await tap.call("apple")
 			var ap: Array = sp.last("appleSignIn")
 			chk.call("iPhone, Apple -> Apple's own sheet with a 64-hex nonce", ap.size() == 2 and str(ap[1]).length() == 64 and Net.social_way == "apple", str(ap))

@@ -462,6 +462,17 @@ func _sign_plugin() -> Object:
 	return null
 
 
+## A plugin's yes: Android's plugin answers a Java boolean as 1 / 0 (an int: `== true` is an error there), the
+## iPhone's as a bool, a build without the method as null.
+static func yes(v: Variant) -> bool:
+	match typeof(v):
+		TYPE_BOOL:
+			return v
+		TYPE_INT:
+			return int(v) != 0
+	return false
+
+
 ## True when the sign-in happens over the game (a sheet or tab), not in the phone's browser.
 func social_in_app() -> bool:
 	return _sign_plugin() != null
@@ -480,9 +491,9 @@ func social_sign_in(p: String, rules := false) -> Dictionary:
 	# 1. the provider's own sheet
 	var sheet := ""
 	if plug != null:
-		if p == "google" and not ios and google_client_id != "" and plug.call("googleSheet", google_client_id, h) == true:
+		if p == "google" and not ios and google_client_id != "" and yes(plug.call("googleSheet", google_client_id, h)):
 			sheet = "sheet"
-		elif p == "apple" and ios and plug.call("appleSignIn", h) == true:
+		elif p == "apple" and ios and yes(plug.call("appleSignIn", h)):
 			sheet = "apple"
 	print("[net] sign in with %s: %s" % [p, sheet if sheet != "" else ("no sheet here" if plug != null else "no plugin")])
 	if sheet != "":
@@ -522,7 +533,7 @@ func social_sign_in(p: String, rules := false) -> Dictionary:
 	var tab := false
 	if plug != null:
 		var u := social_url + ("&cb=1" if ios else "&cb=2")
-		if plug.call("openAuthTab", u, url + "?a=auth_status", k) == true:
+		if yes(plug.call("openAuthTab", u, url + "?a=auth_status", k)):
 			tab = true
 			social_url = u
 	social_way = "tab" if tab else "browser"

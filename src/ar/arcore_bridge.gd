@@ -92,8 +92,8 @@ func open_app_settings() -> void:
 ## v1.1.15: the phone's share sheet. False when this build has no way to show it (the game copies the link instead).
 func share(text: String, title: String) -> bool:
 	if plugin:
-		var r = plugin.call("share", text, title)    # (a build of the plugin without it answers null)
-		return r == true
+		# (a build of the plugin without it answers null; Android answers a Java boolean as 1 / 0)
+		return Net.yes(plugin.call("share", text, title))
 	return false
 
 
