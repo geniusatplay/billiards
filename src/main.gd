@@ -1770,12 +1770,12 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
-		if only == "" and s in ["perf", "ios_check", "store", "breakview", "pkbake"]:
-			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator)
+		if only == "" and s in ["perf", "ios_check", "store", "breakview", "pkbake", "signin_device"]:
+			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator; signin_device on a phone)
 		Game.world_ready = "studio" if s != "world" else ""   # (v1.1.15: the world is chosen; the "world" step tests choosing it)
 		# (the steps about placing the cue ball see Play in place's placing start for themselves)
 		_tour_autoplace = not (s in ["breakpos", "inplace", "hand", "lang", "tutorial", "tut_lang", "world", "lang_name"])
@@ -2460,6 +2460,459 @@ func _tour_step(dir: String, s: String) -> void:
 				all_ok = all_ok and r[1]
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("READYUP %s" % ("PASS" if all_ok else "FAIL"))
+		"social":
+			# 24 Nov 2026 (Randy: "add sign in with google or facebook on the apk which will fast create their account.
+			# and add ios on the ios version"): the account screen offers the sign-ins the server has on; one opens the
+			# browser (here: the test plays the browser with the in-memory server), the game waits, a new account takes
+			# this phone's progress and asks for a username with one suggested; Settings says how it is signed in and
+			# deletes it with one more tap; Cancel, a sign-in cancelled at the provider, a provider switched off, and
+			# Apple only (and always) on iPhones.
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			_end_match()
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			Game.progress = Game.fresh_progress()
+			Game.set_s("ar_mode", "studio")
+			Net.social_open = false
+			var res := []
+			var chk := func(what: String, good: bool, info: String):
+				res.append([what + ("  " + info if info != "" else ""), good])
+			# this phone has been playing: 345 XP, which the new account keeps
+			await Net.ensure_player()
+			Game.progress["xp"] = 345
+			_stack.clear()
+			go("menu")
+			go("account")
+			await _wait(0.8)
+			var sc: Control = _screen
+			var gb: Button = sc.find_child("Social_google", true, false)
+			var fbb: Button = sc.find_child("Social_facebook", true, false)
+			chk.call("the account screen offers 'Continue with Google' and 'Continue with Facebook' (no Apple on Android)", gb != null and fbb != null
+				and gb.text == L.t("Continue with %s") % "Google" and sc.find_child("Social_apple", true, false) == null and (sc.find_child("AccountSocial", true, false) as Control).visible, "")
+			await _shot(dir, "social_1_account")
+			var wait_url := func() -> String:
+				var w := 0.0
+				while Net.social_url == "" and w < 3.0:
+					await _wait(0.1)
+					w += 0.1
+				return Net.social_url
+			# --- Google, a new account
+			Net.social_url = ""
+			gb.pressed.emit()
+			var url: String = await wait_url.call()
+			var msg: Label = sc.find_child("AccountMessage", true, false)
+			chk.call("tap -> the browser opens the game's server for Google, the screen waits", url.begins_with(Net.AUTH_URL + "?p=google&h=") and "&l=en" in url
+				and msg.text == "Finish signing in in your browser, then come back here." and (sc.find_child("SocialCancel", true, false) as Control).visible and gb.disabled, url)
+			await _shot(dir, "social_2_waiting")
+			var h: String = srv.auth_start(url)
+			await _wait(2.0)
+			chk.call("still waiting while the browser is open", Net.social_waiting() and not Net.signed_in(), "")
+			srv.auth_finish(h, true, "g-111", "Randy")
+			var w2 := 0.0
+			while Net.social_waiting() and w2 < 6.0:
+				await _wait(0.1)
+				w2 += 0.1
+			await _wait(0.3)
+			var uf: LineEdit = sc.find_child("AccountUsername", true, false)
+			chk.call("signed in: a new account with this phone's progress (345 XP), the username asked with 'Randy' suggested", Net.signed_in() and Net.provider() == "google"
+				and sc.get("mode") == AccountScreen.Mode.NAME and uf.text == "Randy" and uf.is_visible_in_tree() and Game.xp() == 345, "%s / %s" % [Net.provider(), uf.text])
+			await _shot(dir, "social_3_username")
+			(sc.find_child("AccountGo", true, false) as Button).pressed.emit()
+			await _wait(1.0)
+			chk.call("Save username -> done: 'Randy', the account is the server's (google:g-111)", Net.username() == "Randy" and srv.accounts.has("google:g-111")
+				and str(srv.accounts["google:g-111"]["username"]) == "Randy", Net.username())
+			_stack.clear()
+			go("settings")
+			await _wait(0.8)
+			var si: Label = _screen.find_child("SettingsSignedIn", true, false)
+			chk.call("Settings: 'Signed in with Google', the username", si != null and si.text == L.t("Signed in with %s") % "Google", si.text if si else "")
+			for scn in _screen.find_children("*", "ScrollContainer", true, false):
+				if si and (scn as ScrollContainer).is_ancestor_of(si):
+					(scn as ScrollContainer).ensure_control_visible(si)
+			await _wait(0.3)
+			await _shot(dir, "social_4_settings")
+			# --- the same Google account on a "new phone": the same player and progress
+			Net.log_out()
+			await _wait(0.3)
+			go("account_login")
+			await _wait(0.8)
+			sc = _screen
+			Net.social_url = ""
+			(sc.find_child("Social_google", true, false) as Button).pressed.emit()
+			url = await wait_url.call()
+			srv.auth_finish(srv.auth_start(url), true, "g-111", "Randy")
+			var w3 := 0.0
+			while Net.social_waiting() and w3 < 6.0:
+				await _wait(0.1)
+				w3 += 0.1
+			await _wait(0.8)
+			chk.call("signing in again (another phone): the same account, its username and progress, no question", Net.username() == "Randy" and Game.xp() == 345
+				and not Net.need_name() and not (_screen is AccountScreen), "%s %d" % [Net.username(), Game.xp()])
+			# --- Cancel while waiting, and cancelled at the provider
+			Net.log_out()
+			go("account")
+			await _wait(0.8)
+			sc = _screen
+			Net.social_url = ""
+			(sc.find_child("Social_facebook", true, false) as Button).pressed.emit()
+			url = await wait_url.call()
+			(sc.find_child("SocialCancel", true, false) as Button).pressed.emit()
+			await _wait(0.6)
+			msg = sc.find_child("AccountMessage", true, false)
+			chk.call("Cancel -> 'Sign-in was cancelled.', the buttons back", msg.text == "Sign-in was cancelled." and not Net.social_waiting()
+				and not (sc.find_child("Social_facebook", true, false) as Button).disabled and not Net.signed_in(), msg.text)
+			Net.social_url = ""
+			(sc.find_child("Social_facebook", true, false) as Button).pressed.emit()
+			url = await wait_url.call()
+			srv.auth_finish(srv.auth_start(url), false)
+			var w4 := 0.0
+			while Net.social_waiting() and w4 < 6.0:
+				await _wait(0.1)
+				w4 += 0.1
+			await _wait(0.2)
+			chk.call("cancelled at Facebook -> the same words", msg.text == "Sign-in was cancelled." and not Net.signed_in(), msg.text)
+			# --- delete an account made this way: no password, one more tap
+			Net.social_url = ""
+			(sc.find_child("Social_facebook", true, false) as Button).pressed.emit()
+			url = await wait_url.call()
+			srv.auth_finish(srv.auth_start(url), true, "fb-5", "Mia")
+			var w5 := 0.0
+			while Net.social_waiting() and w5 < 6.0:
+				await _wait(0.1)
+				w5 += 0.1
+			await _wait(0.3)
+			Net.set_username("Mia Fb")
+			await _wait(0.5)
+			_stack.clear()
+			go("settings")
+			await _wait(0.8)
+			var dbn: Button = null
+			for b in _screen.find_children("*", "Button", true, false):
+				if (b as Button).text == "Delete account":
+					dbn = b
+			if dbn:
+				dbn.pressed.emit()
+			await _wait(0.4)
+			var pwf := false
+			for e in _screen.find_children("*", "LineEdit", true, false):
+				pwf = pwf or (e as LineEdit).is_visible_in_tree()
+			chk.call("Settings -> Delete account (Facebook): no password asked", dbn != null and not pwf, "")
+			var dfg: Control = _screen.find_child("SettingsDeleteForGood", true, false)
+			for scn in _screen.find_children("*", "ScrollContainer", true, false):
+				if dfg and (scn as ScrollContainer).is_ancestor_of(dfg):
+					(scn as ScrollContainer).ensure_control_visible(dfg)
+			await _wait(0.3)
+			await _shot(dir, "social_5_delete")
+			(_screen.find_child("SettingsDeleteForGood", true, false) as Button).pressed.emit()
+			await _wait(1.0)
+			chk.call("Delete for good -> the account is gone", not srv.accounts.has("facebook:fb-5") and not Net.signed_in(), "")
+			# --- providers: off on the server -> no button; Apple on iPhones only; the App Store rule
+			srv.providers = {"google": true, "facebook": false, "apple": false}
+			_stack.clear()
+			go("account")
+			await _wait(0.8)
+			chk.call("Facebook switched off on the server -> its button is gone", _screen.find_child("Social_facebook", true, false) == null
+				and _screen.find_child("Social_google", true, false) != null, "")
+			srv.providers = {"google": true, "facebook": true, "apple": true}
+			await Net.fetch_providers()
+			chk.call("Android: Google, Facebook; iPhone: Google, Facebook, Apple", Net.offered_providers(0, 1) == ["google", "facebook"]
+				and Net.offered_providers(1, 1) == ["google", "facebook", "apple"], "%s / %s" % [Net.offered_providers(0, 1), Net.offered_providers(1, 1)])
+			srv.providers = {"google": true, "facebook": true, "apple": false}
+			await Net.fetch_providers()
+			chk.call("iPhone store version without Apple switched on: no Google / Facebook either (the App Store asks for Apple beside them)",
+				Net.offered_providers(1, 1).is_empty() and Net.offered_providers(1, 0) == ["google", "facebook"], str(Net.offered_providers(1, 1)))
+			srv.providers = {"google": true, "facebook": true, "apple": true}
+			Net.as_ios = true
+			_stack.clear()
+			go("account")
+			await _wait(0.8)
+			chk.call("on an iPhone: 'Continue with Apple' too", _screen.find_child("Social_apple", true, false) != null, "")
+			await _shot(dir, "social_6_iphone")
+			Net.as_ios = false
+			Net.social_open = true
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("SOCIAL %s" % ("PASS" if all_ok else "FAIL"))
+		"social_native":
+			# 24 Nov 2026 (Randy: "please do it the smoothe way with their sign in screens in app which doesnt need the
+			# browser to sign in"): Google's own account sheet on Android 14+ and Apple's on iPhones hand the game a
+			# token the server checks (auth_native); everything else is the sign-in page in a tab / sheet over the
+			# game, which tells the game when it closes. A stand-in plays the phone's side (tests/signin_standin.gd).
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			_end_match()
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			Game.progress = Game.fresh_progress()
+			Game.set_s("ar_mode", "studio")
+			Net.social_open = false
+			var sp = load("res://tests/signin_standin.gd").new()
+			Net.signin_plugin = sp
+			var res := []
+			var chk := func(what: String, good: bool, info: String):
+				res.append([what + ("  " + info if info != "" else ""), good])
+			var settle := func(limit: float) -> float:
+				var w := 0.0
+				while Net.social_waiting() and w < limit:
+					await _wait(0.05)
+					w += 0.05
+				await _wait(0.2)
+				return w
+			var tap := func(p: String) -> Control:
+				_stack.clear()
+				go("menu")
+				go("account")
+				await _wait(0.6)
+				(_screen.find_child("Social_" + p, true, false) as Button).pressed.emit()
+				await _wait(0.15)
+				return _screen
+			await Net.ensure_player()
+			await Net.fetch_providers()
+			Game.progress["xp"] = 210
+			# --- Android 14+: Google's sheet -> a token -> a new account
+			var sc: Control = await tap.call("google")
+			var gs: Array = sp.last("googleSheet")
+			var msg: Label = sc.find_child("AccountMessage", true, false)
+			chk.call("Google -> Google's own sheet, asked for the server's client id and a 64-hex nonce; the screen says 'Signing in…'",
+				gs.size() == 3 and gs[1] == srv.google_client_id and str(gs[2]).length() == 64 and msg.text == "Signing in…"
+				and sp.count("openAuthTab") == 0 and Net.social_way == "sheet", str(gs))
+			await _shot(dir, "native_1_waiting")
+			sp.state = "token:fake.g-201.%s.Noor" % gs[2]
+			var took: float = await settle.call(3.0)
+			var uf: LineEdit = sc.find_child("AccountUsername", true, false)
+			chk.call("the token -> signed in within a moment: a new account with this phone's 210 XP, username asked with 'Noor' suggested",
+				took < 1.0 and Net.signed_in() and Net.provider() == "google" and srv.accounts.has("google:g-201") and sc.get("mode") == AccountScreen.Mode.NAME
+				and uf.text == "Noor" and Game.xp() == 210 and sp.state == "", "%.2fs %s" % [took, uf.text])
+			await _shot(dir, "native_2_username")
+			(sc.find_child("AccountGo", true, false) as Button).pressed.emit()
+			await _wait(0.8)
+			# --- the same token again (a copy): refused
+			var body := {"provider": "google", "id_token": "fake.g-201.%s" % gs[2], "k": "x"}
+			chk.call("a token is good for its own sign-in only (wrong secret: refused)", str((await Net.api("auth_native", body)).get("error", "")) == "refused", "")
+			# --- closed by the player
+			Net.log_out()
+			await _wait(0.2)
+			sc = await tap.call("google")
+			sp.state = "cancel"
+			await settle.call(3.0)
+			msg = sc.find_child("AccountMessage", true, false)
+			chk.call("the sheet closed -> 'Sign-in was cancelled.', nothing opened instead", msg.text == "Sign-in was cancelled." and not Net.signed_in()
+				and sp.count("openAuthTab") == 0 and not (sc.find_child("Social_google", true, false) as Button).disabled, msg.text)
+			# --- no Google account on the phone (or the sheet can't answer): the sign-in page in a tab instead
+			sc = await tap.call("google")
+			sp.state = "nocred:no accounts"
+			await _wait(0.4)
+			var ot: Array = sp.last("openAuthTab")
+			var h := ""
+			if ot.size() == 4:
+				h = srv.auth_start(ot[1])
+			chk.call("the sheet had nothing -> the sign-in page in a tab over the game (cb=2), the server's auth_status for it, the secret behind it",
+				ot.size() == 4 and str(ot[1]).begins_with(Net.AUTH_URL + "?p=google&h=") and str(ot[1]).ends_with("&cb=2") and str(ot[2]) == Net.url + "?a=auth_status"
+				and str(ot[3]).sha256_text() == h and Net.social_way == "tab", str(ot.slice(1, 3)))
+			srv.auth_finish(h, true, "g-202", "Lee")
+			await _wait(0.6)
+			sp.state = "tab_closed"
+			took = await settle.call(4.0)
+			chk.call("signed in at the provider, tab closed -> signed in within a moment", took < 1.2 and Net.signed_in() and srv.accounts.has("google:g-202"), "%.2fs" % took)
+			# --- Facebook: always the tab; closed before signing in -> cancelled at once
+			Net.log_out()
+			await _wait(0.2)
+			var sheets: int = sp.count("googleSheet")
+			sc = await tap.call("facebook")
+			ot = sp.last("openAuthTab")
+			chk.call("Facebook -> straight to the tab (no Google sheet)", sp.count("googleSheet") == sheets and ot.size() == 4 and str(ot[1]).begins_with(Net.AUTH_URL + "?p=facebook&"), "")
+			if ot.size() == 4:
+				srv.auth_start(ot[1])
+			await _wait(0.5)
+			sp.state = "tab_closed"
+			took = await settle.call(4.0)
+			msg = sc.find_child("AccountMessage", true, false)
+			chk.call("the tab closed before signing in -> 'Sign-in was cancelled.' within a moment", took < 1.2 and msg.text == "Sign-in was cancelled." and not Net.signed_in(), "%.2fs %s" % [took, msg.text])
+			sc = await tap.call("facebook")
+			sp.state = "tab_closed"          # (closed before its page even loaded: the server never saw it)
+			took = await settle.call(4.0)
+			msg = sc.find_child("AccountMessage", true, false)
+			chk.call("... closed before the page loaded -> the same words (not 'expired')", took < 1.2 and msg.text == "Sign-in was cancelled.", "%.2fs %s" % [took, msg.text])
+			# --- Android 13 or older (no sheet): the tab
+			sp.sheet_ok = false
+			sc = await tap.call("google")
+			chk.call("a phone without the sheet -> the tab", sp.state == "tab" and Net.social_way == "tab", Net.social_way)
+			Net.cancel_social()
+			await _wait(0.2)
+			sp.sheet_ok = true
+			# --- the tab can't open: the browser; the tab fails after opening: the browser
+			sp.tab_ok = false
+			sp.sheet_ok = false
+			sc = await tap.call("facebook")
+			chk.call("no tab -> the phone's browser", Net.social_way == "browser" and Net.social_url.begins_with(Net.AUTH_URL + "?p=facebook&") and not "cb=" in Net.social_url, Net.social_url)
+			Net.cancel_social()
+			await _wait(0.2)
+			sp.tab_ok = true
+			sc = await tap.call("facebook")
+			sp.state = "error:no browser"
+			await _wait(0.5)
+			chk.call("the tab failed -> the browser instead", Net.social_way == "browser" and Net.social_waiting(), Net.social_way)
+			Net.cancel_social()
+			await _wait(0.2)
+			sp.sheet_ok = true
+			# --- iPhone: Apple's own sheet
+			Net.as_ios = true
+			sc = await tap.call("apple")
+			var ap: Array = sp.last("appleSignIn")
+			chk.call("iPhone, Apple -> Apple's own sheet with a 64-hex nonce", ap.size() == 2 and str(ap[1]).length() == 64 and Net.social_way == "apple", str(ap))
+			sp.state = "token:fake.a-301.%s\nAmara" % (ap[1] if ap.size() == 2 else "")
+			await settle.call(3.0)
+			uf = sc.find_child("AccountUsername", true, false)
+			chk.call("Apple's token and first name -> a new account, 'Amara' suggested", Net.signed_in() and Net.provider() == "apple" and srv.accounts.has("apple:a-301")
+				and uf.text == "Amara", uf.text)
+			Net.log_out()
+			await _wait(0.2)
+			# Apple's sheet can't sign in (a re-signed test build): Apple's page if the server has it, else say so
+			sc = await tap.call("apple")
+			sp.state = "error:1000 The operation couldn't be completed."
+			await settle.call(3.0)
+			msg = sc.find_child("AccountMessage", true, false)
+			chk.call("Apple's sheet failed, no Apple page on the server -> 'Something went wrong with the sign-in.'", msg.text == "Something went wrong with the sign-in."
+				and not Net.signed_in(), msg.text)
+			srv.apple_web = true
+			await Net.fetch_providers()
+			var tabs: int = sp.count("openAuthTab")
+			sc = await tap.call("apple")
+			sp.state = "error:1000 The operation couldn't be completed."
+			await _wait(0.4)
+			ot = sp.last("openAuthTab")
+			chk.call("... with Apple's page on the server -> it opens in the iPhone's sign-in sheet (cb=1)", sp.count("openAuthTab") == tabs + 1
+				and str(ot[1]).begins_with(Net.AUTH_URL + "?p=apple&") and str(ot[1]).ends_with("&cb=1"), str(ot[1]) if ot.size() > 1 else "")
+			Net.cancel_social()
+			await _wait(0.2)
+			srv.apple_web = false
+			await Net.fetch_providers()
+			# --- iPhone, Google: the sign-in sheet, which closes on the game's address when the sign-in is done
+			sheets = sp.count("googleSheet")
+			sc = await tap.call("google")
+			ot = sp.last("openAuthTab")
+			chk.call("iPhone, Google -> the sign-in sheet (cb=1), no Google sheet", sp.count("googleSheet") == sheets and str(ot[1]).begins_with(Net.AUTH_URL + "?p=google&")
+				and str(ot[1]).ends_with("&cb=1"), "")
+			srv.auth_finish(srv.auth_start(ot[1]), true, "g-303", "Kai")
+			sp.state = "tab_done:ok"
+			took = await settle.call(4.0)
+			chk.call("... done -> signed in within a moment", took < 1.2 and Net.signed_in() and srv.accounts.has("google:g-303"), "%.2fs" % took)
+			await _shot(dir, "native_3_iphone_done")
+			Net.as_ios = false
+			Net.signin_plugin = null
+			Net.social_open = true
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("SOCIALNATIVE %s" % ("PASS" if all_ok else "FAIL"))
+		"signin_device":
+			# QA on a phone or emulator (24 Nov 2026): the real plugin's sign-in, no stand-in - Google's sheet, else the
+			# sign-in tab - with what the plugin says logged every half second ("[signin] ..."), for adb screenshots of
+			# the sheet / tab while it runs. --only=signin_device [--p=facebook|apple] [--signin_wait=60]
+			var prov := "google"
+			var limit := 60.0
+			for a in OS.get_cmdline_user_args():
+				if a.begins_with("--p="):
+					prov = a.substr(4)
+				elif a.begins_with("--signin_wait="):
+					limit = float(a.substr(14))
+			await Net.fetch_providers()
+			print("[signin] providers %s, google client id %s, plugin %s" % [Net.providers, "set" if Net.google_client_id != "" else "-", "yes" if Net.social_in_app() else "no"])
+			var plug := Engine.get_singleton("EmeraldAR") if Engine.has_singleton("EmeraldAR") else null
+			var out := [null]
+			var run := func():
+				out[0] = await Net.social_sign_in(prov)
+			run.call()
+			var t := 0.0
+			var last := ""
+			while out[0] == null and t < limit:
+				await _wait(0.5)
+				t += 0.5
+				var st := "%s | %s" % [Net.social_way, str(plug.call("signInState")) if plug else "-"]
+				if st != last:
+					print("[signin] %.1fs way/state: %s" % [t, st.substr(0, 60)])
+					last = st
+			if out[0] == null:
+				Net.cancel_social()
+				await _wait(0.5)
+			print("[signin] result: %s" % [out[0]])
+		"lang_social":
+			# the sign-in texts in every language: the account screen (the buttons, "or", waiting), Settings signed in
+			# with Google and deleting without a password. --langs=de,ta; pictures for en, ta, ar (--allshots for all)
+			var langs := Loc.codes()
+			var all_shots := OS.get_cmdline_user_args().has("--allshots")
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--langs="):
+					langs = Array(arg.substr(8).split(","))
+			var problems := 0
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			Game.progress = Game.fresh_progress()
+			Net.social_open = false
+			Net.as_ios = true
+			await Net.ensure_player()
+			for code in langs:
+				Loc.set_language(code)
+				var pic: bool = all_shots or code in ["en", "ta", "ar"]
+				Game.progress["provider"] = ""
+				Game.progress["email"] = ""
+				_stack.clear()
+				go("account")
+				await _wait(0.8)
+				problems += _audit_text(code, "account_social", _screen)
+				_screen.call("_say", "Finish signing in in your browser, then come back here.")
+				(_screen.find_child("SocialCancel", true, false) as Control).visible = true
+				await _wait(0.2)
+				problems += _audit_text(code, "account_waiting", _screen)
+				if pic:
+					await _shot(dir, "ls_%s_account" % code)
+				_screen.call("_say", "Signing in…")
+				await _wait(0.1)
+				problems += _audit_text(code, "account_signing_in", _screen)
+				(_screen.find_child("SocialCancel", true, false) as Control).visible = false
+				_screen.call("_say", "Sign-in was cancelled.", true)
+				await _wait(0.1)
+				problems += _audit_text(code, "account_cancelled", _screen)
+				_screen.call("_say", "Something went wrong with the sign-in.", true)
+				await _wait(0.1)
+				problems += _audit_text(code, "account_failed", _screen)
+				Game.progress["provider"] = "google"
+				Game.progress["username"] = "Pool Shark"
+				_stack.clear()
+				go("settings")
+				await _wait(0.6)
+				for b in _screen.find_children("*", "Button", true, false):
+					if (b as Button).text == "Delete account":
+						(b as Button).pressed.emit()
+				await _wait(0.3)
+				problems += _audit_text(code, "settings_social", _screen)
+				if pic:
+					await _shot(dir, "ls_%s_settings" % code)
+			Loc.set_language("en")
+			Net.as_ios = false
+			Net.social_open = true
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			print("LANGSOCIAL %s: %d problems in %d languages" % ["PASS" if problems == 0 else "FAIL", problems, langs.size()])
 		"world":
 			# v1.1.15 (Randy: "when clicking a play option, if they havnt placed the world yet, they must do this
 			# before starting, and if they have ... the place world button should be there on the screen they click

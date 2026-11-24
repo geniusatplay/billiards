@@ -288,7 +288,7 @@ class MainMenu extends Screen:
 		pt.name = "PackagesTitle"
 		pt.clip_text = true
 		pt.add_theme_color_override("font_color", rc if has else UIKit.TEXT)
-		(func(): _fit_line(pt, 186.0)).call_deferred()       # (once it is in the tree and has its theme)
+		_fit_line_later(pt, 186.0)       # (once it is in the tree and has its theme)
 		pcol.add_child(pt)
 		var ps: Label
 		if not has:
@@ -301,7 +301,7 @@ class MainMenu extends Screen:
 			ps.name = "PackagesStatus"
 			pcol.add_theme_constant_override("separation", -8)
 			pcol.add_child(ps)
-			(func(): _fit_lines(ps, 2)).call_deferred()
+			_fit_lines_later(ps, 2)
 		else:
 			# "Ready!" or the time left, and how many are waiting
 			var srow := UIKit.hbox(10)
@@ -317,7 +317,7 @@ class MainMenu extends Screen:
 			ps.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			srow.add_child(ps)
 			var badge := UIKit.label("×%d" % q.size(), "MutedLabel")
-			(func(): _fit_line(ps, 120.0)).call_deferred()       # (the room beside "×99")
+			_fit_line_later(ps, 120.0)       # (the room beside "×99")
 			badge.name = "PackagesCount"
 			badge.add_theme_color_override("font_color", rc)
 			srow.add_child(badge)
@@ -368,13 +368,13 @@ class MainMenu extends Screen:
 		t.name = "ChestTitle"
 		t.add_theme_color_override("font_color", PackageView.XP_GOLD)
 		t.clip_text = true
-		(func(): _fit_line(t, 186.0)).call_deferred()
+		_fit_line_later(t, 186.0)
 		col.add_child(t)
 		var st := UIKit.label(L.t("Ready!") if ready else XP.clock(Game.chest_left()), "MutedLabel")
 		st.clip_text = true
 		st.name = "ChestTime"
 		if ready:
-			(func(): _fit_line(st, 186.0)).call_deferred()
+			_fit_line_later(st, 186.0)
 		if ready:
 			st.add_theme_color_override("font_color", UIKit.TEXT)
 		col.add_child(st)
@@ -385,6 +385,18 @@ class MainMenu extends Screen:
 	## A one-line label in a corner tile: made smaller (down to `min_px`) when its words are wider than the room, so a
 	## long language still shows the whole word (v1.1.15).
 	## A wrapped label: made smaller (down to `min_px`) until its words take at most `lines` lines.
+	## Once the label is in the tree and has its theme (next frame). A weak reference: the menu may be gone by then
+	## (left in the same frame), and a lambda holding a freed label would complain.
+	static func _fit_line_later(l: Label, room: float) -> void:
+		var w: WeakRef = weakref(l)
+		(func(): _fit_line(w.get_ref() as Label, room)).call_deferred()
+
+
+	static func _fit_lines_later(l: Label, lines: int) -> void:
+		var w: WeakRef = weakref(l)
+		(func(): _fit_lines(w.get_ref() as Label, lines)).call_deferred()
+
+
 	static func _fit_lines(l: Label, lines: int, min_px := 18) -> void:
 		if not is_instance_valid(l) or not l.is_inside_tree():
 			return

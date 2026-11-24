@@ -5,6 +5,9 @@
 * the camera question iOS shows the first time: "Emerald 8 Ball Pool uses the camera to put the pool table in
   your room (AR)." (the name under the icon) in every language of assets/i18n/strings.csv
 * an Xcode project only (application/export_project_only): ios_plugin/ci.sh builds it, unsigned, for Sideloadly
+* Sign in with Apple (the com.apple.developer.applesignin entitlement, 24 Nov 2026): it takes effect when the app is
+  signed with the team's own profile (Xcode / App Store); an unsigned build re-signed by Sideloadly may lack it,
+  and then the game uses Apple's sign-in page in the sign-in sheet instead (needs the Services ID on the server)
 
 Run it after a version bump; ios_plugin/ci.sh runs it before every iPhone export too.
 Usage: python3 ios_plugin/make_preset.py
@@ -93,7 +96,7 @@ modules/camera=false
 entitlements/increased_memory_limit=false
 entitlements/game_center=false
 entitlements/push_notifications="Disabled"
-entitlements/additional=""
+entitlements/additional="<key>com.apple.developer.applesignin</key><array><string>Default</string></array>"
 capabilities/access_wifi=false
 capabilities/performance_gaming_tier=false
 capabilities/performance_a12=false

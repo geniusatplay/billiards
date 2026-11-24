@@ -114,7 +114,8 @@ static func account_card(parent: Control, router: Node) -> void:
 	change.pressed.connect(func(): router.call("go", "account_name"))
 	urow.add_child(change)
 	acc.add_child(urow)
-	var who := UIKit.label(L.t("Signed in as %s") % Net.email(), "MutedLabel")
+	var who := UIKit.label(L.t("Signed in with %s") % Net.provider_name(Net.provider()) if Net.provider() != "" else L.t("Signed in as %s") % Net.email(), "MutedLabel")
+	who.name = "SettingsSignedIn"
 	who.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED      # already translated, with the email in it
 	acc.add_child(who)
 	# blocked players, each with Unblock (both stores ask that blocking can be undone by the player)
@@ -148,7 +149,8 @@ static func account_card(parent: Control, router: Node) -> void:
 	# deleting asks for the password once more, right here
 	var box := UIKit.vbox(10)
 	box.visible = false
-	var note := UIKit.label("This deletes your account and its progress for good. Enter your password to confirm.", "SmallLabel")
+	var social := Net.provider() != ""        # (made with Google, Facebook or Apple: no password, one more tap)
+	var note := UIKit.label("This deletes your account and its progress for good." if social else "This deletes your account and its progress for good. Enter your password to confirm.", "SmallLabel")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(note)
 	var row := UIKit.hbox(14)
@@ -158,6 +160,7 @@ static func account_card(parent: Control, router: Node) -> void:
 	pw.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_PASSWORD
 	pw.custom_minimum_size = Vector2(0, 76)
 	pw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pw.visible = not social
 	row.add_child(pw)
 	var go := UIKit.button("Delete for good", "GhostButton", "", 340)
 	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
@@ -171,8 +174,9 @@ static func account_card(parent: Control, router: Node) -> void:
 	del.pressed.connect(func():
 		Sfx.ui("toggle")
 		box.visible = not box.visible)
+	go.name = "SettingsDeleteForGood"
 	go.pressed.connect(func():
-		if pw.text.length() < 6:
+		if not social and pw.text.length() < 6:
 			msg.text = "Wrong email or password."
 			return
 		go.disabled = true

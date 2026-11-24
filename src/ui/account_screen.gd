@@ -25,6 +25,11 @@ var _rules_line: Label
 var _go: Button
 var _switch: Button
 var _busy := false
+# 24 Nov 2026: sign in with Google, Facebook or Apple (Net.social_sign_in), under the fields
+var _social: VBoxContainer
+var _social_row: HFlowContainer
+var _social_cancel: Button
+var _attempt := 0
 
 
 func _init(p_router: Node = null, start_mode := Mode.CREATE) -> void:
@@ -70,6 +75,26 @@ func _ready() -> void:
 	_msg.name = "AccountMessage"
 	_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	left.add_child(_msg)
+	_social = UIKit.vbox(10)
+	_social.name = "AccountSocial"
+	_social.visible = false
+	var orl := UIKit.label("or", "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
+	_social.add_child(orl)
+	_social_row = HFlowContainer.new()
+	_social_row.add_theme_constant_override("h_separation", 14)
+	_social_row.add_theme_constant_override("v_separation", 12)
+	_social.add_child(_social_row)
+	_social_cancel = UIKit.button("Cancel", "GhostButton", "", 300)
+	_social_cancel.name = "SocialCancel"
+	_social_cancel.visible = false
+	_social_cancel.pressed.connect(func():
+		Sfx.ui("back")
+		Net.cancel_social()
+		_attempt += 1              # (the screen is free again at once; the waiting stops on its next look)
+		_social_done()
+		_say("Sign-in was cancelled.", true))
+	_social.add_child(_social_cancel)
+	left.add_child(_social)
 
 	var right := UIKit.vbox(16)
 	right.custom_minimum_size.x = 480
@@ -112,6 +137,69 @@ func _ready() -> void:
 	_email.text_submitted.connect(func(_t: String): _pass.grab_focus())
 	_pass.text_submitted.connect(func(_t: String): _submit())
 	_refresh()
+	_load_providers()
+
+
+## The sign-ins the server has switched on, as buttons ("Continue with Google", ...).
+func _load_providers() -> void:
+	await Net.fetch_providers()
+	if not is_inside_tree():
+		return
+	for c in _social_row.get_children():
+		c.queue_free()
+	for p in Net.offered_providers():
+		var b := UIKit.button(L.t("Continue with %s") % Net.provider_name(p), "", "user", 330)
+		b.name = "Social_" + p
+		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED     # (already translated, with the name in it)
+		var which: String = p
+		b.pressed.connect(func(): _social_go(which))
+		_social_row.add_child(b)
+	_social.visible = mode != Mode.NAME and not Net.offered_providers().is_empty()
+
+
+func _social_done() -> void:
+	_busy = false
+	_go.disabled = false
+	for b in _social_row.get_children():
+		(b as Button).disabled = false
+	_social_cancel.visible = false
+
+
+func _exit_tree() -> void:
+	if _social_cancel and _social_cancel.visible:
+		Net.cancel_social()          # (left while the browser sign-in was still open)
+
+
+func _social_go(p: String) -> void:
+	if _busy:
+		return
+	Sfx.ui("tap")
+	var typed := NameFilter.tidy(_user.text) if mode == Mode.CREATE else ""
+	_busy = true
+	_go.disabled = true
+	for b in _social_row.get_children():
+		(b as Button).disabled = true
+	_social_cancel.visible = true
+	_say("Signing in…" if Net.social_in_app() else "Finish signing in in your browser, then come back here.")
+	DisplayServer.virtual_keyboard_hide()
+	_attempt += 1
+	var mine := _attempt
+	var r: Dictionary = await Net.social_sign_in(p, mode == Mode.CREATE)
+	if not is_inside_tree() or mine != _attempt:
+		return
+	_social_done()
+	if not r.get("ok", false):
+		_say(Net.account_error(r), true)
+		return
+	if Net.need_name():
+		# a new account (or one without a username): the username typed above, or the one the server suggests
+		mode = Mode.NAME
+		_user.text = typed if typed != "" and NameFilter.check(typed) == "" else str(r.get("suggest", ""))
+		_refresh()
+		_user.caret_column = _user.text.length()
+		return
+	router.call("toast", L.t("Signed in as %s") % Net.username())
+	router.call("back")
 
 
 func _field(hint: String, kind: int) -> LineEdit:
@@ -142,6 +230,7 @@ func _refresh() -> void:
 	_pass.visible = mode != Mode.NAME
 	_switch.visible = mode != Mode.NAME
 	_rules.visible = mode != Mode.LOGIN
+	_social.visible = mode != Mode.NAME and not Net.offered_providers().is_empty()
 	_rules_line.text = "By choosing a username you agree to the Player rules." if mode == Mode.NAME \
 		else "By creating an account you agree to the Player rules."
 	_user.placeholder_text = "Username (3-16 letters or numbers)"

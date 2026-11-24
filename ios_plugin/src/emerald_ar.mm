@@ -17,6 +17,7 @@
 
 #import <ARKit/ARKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <AuthenticationServices/AuthenticationServices.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -525,6 +526,181 @@ static void ear_put_pose(float *p_s, int p_at, simd_float4x4 p_m) {
 @end
 
 // ------------------------------------------------------------------------------------------ Godot side
+// ------------------------------------------------------------------------------------------ sign-in (24 Nov 2026)
+// Randy: "please do it the smoothe way with their sign in screens in app which doesnt need the browser to sign in".
+//   Sign in with Apple: Apple's own sheet (Face ID / passcode) over the game; the identity token it hands back is
+//     checked by the game's server (api.php auth_native: signed by Apple, for this app, with this sign-in's nonce).
+//   Google / Facebook: their sign-in page in the iPhone's sign-in sheet (ASWebAuthenticationSession) over the game;
+//     the server ends it on the game's own address (emeraldbreak://auth?r=ok), which closes the sheet.
+// The game polls signInState(): "" idle, "busy", "token:TOKEN\nGIVEN_NAME", "cancel", "error:...", "tab",
+// "tab_done:ok|error", "tab_closed" - the same words as the Android plugin (SignIn.java).
+static UIWindow *ear_key_window() {
+	UIWindow *any = nil;
+	for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+		if ([scene isKindOfClass:[UIWindowScene class]]) {
+			for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+				if (w.isKeyWindow) {
+					return w;
+				}
+				if (!any) {
+					any = w;
+				}
+			}
+		}
+	}
+	return any;
+}
+
+@interface EARSignIn : NSObject <ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding,
+		ASWebAuthenticationPresentationContextProviding>
+@property(atomic, copy) NSString *state;
+@property(atomic) NSInteger run;
+@property(nonatomic, strong) ASAuthorizationController *apple;
+@property(nonatomic, strong) ASWebAuthenticationSession *web;
+@end
+
+@implementation EARSignIn
+
+- (instancetype)init {
+	if ((self = [super init])) {
+		_state = @"";
+	}
+	return self;
+}
+
+- (ASPresentationAnchor)presentationAnchorForAuthorizationController:(ASAuthorizationController *)controller {
+	return ear_key_window();
+}
+
+- (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:(ASWebAuthenticationSession *)session {
+	return ear_key_window();
+}
+
+- (void)finish:(NSInteger)mine state:(NSString *)s {
+	if (mine == self.run) {
+		self.state = s;
+		NSLog(@"[EmeraldAR] sign-in: %@", [s hasPrefix:@"token:"] ? @"token" : s);
+	}
+}
+
+- (BOOL)appleWithNonce:(NSString *)nonce {
+	if (!nonce) {
+		return NO;
+	}
+	NSInteger mine = ++self.run;
+	self.state = @"busy";
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (mine != self.run) {
+			return;
+		}
+		ASAuthorizationAppleIDRequest *r = [[ASAuthorizationAppleIDProvider new] createRequest];
+		r.requestedScopes = @[ ASAuthorizationScopeFullName ];
+		r.nonce = nonce;
+		ASAuthorizationController *c = [[ASAuthorizationController alloc] initWithAuthorizationRequests:@[ r ]];
+		c.delegate = self;
+		c.presentationContextProvider = self;
+		self.apple = c;
+		[c performRequests];
+	});
+	return YES;
+}
+
+- (void)authorizationController:(ASAuthorizationController *)controller didCompleteWithAuthorization:(ASAuthorization *)authorization {
+	if (controller != self.apple) {
+		return;
+	}
+	self.apple = nil;
+	NSString *s = @"error:no token";
+	if ([authorization.credential isKindOfClass:[ASAuthorizationAppleIDCredential class]]) {
+		ASAuthorizationAppleIDCredential *c = (ASAuthorizationAppleIDCredential *)authorization.credential;
+		NSString *tok = c.identityToken ? [[NSString alloc] initWithData:c.identityToken encoding:NSUTF8StringEncoding] : nil;
+		NSString *given = c.fullName.givenName ?: @"";      // (Apple gives the name the first time only)
+		if (tok.length) {
+			s = [NSString stringWithFormat:@"token:%@\n%@", tok, [given stringByReplacingOccurrencesOfString:@"\n" withString:@" "]];
+		}
+	}
+	[self finish:self.run state:s];
+}
+
+- (void)authorizationController:(ASAuthorizationController *)controller didCompleteWithError:(NSError *)error {
+	if (controller != self.apple) {
+		return;
+	}
+	self.apple = nil;
+	[self finish:self.run state:error.code == ASAuthorizationErrorCanceled ? @"cancel" : [NSString stringWithFormat:@"error:%ld %@", (long)error.code, error.localizedDescription]];
+}
+
+- (BOOL)openTab:(NSString *)url {
+	NSURL *u = url ? [NSURL URLWithString:url] : nil;
+	if (!u) {
+		return NO;
+	}
+	NSInteger mine = ++self.run;
+	self.state = @"tab";
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (mine != self.run) {
+			return;
+		}
+		__weak EARSignIn *weak = self;
+		ASWebAuthenticationSession *w = [[ASWebAuthenticationSession alloc] initWithURL:u callbackURLScheme:@"emeraldbreak"
+				completionHandler:^(NSURL *callback, NSError *error) {
+					EARSignIn *me = weak;
+					if (!me || mine != me.run) {
+						return;
+					}
+					me.web = nil;
+					if (callback) {
+						NSString *r = @"";
+						for (NSURLQueryItem *q in [NSURLComponents componentsWithURL:callback resolvingAgainstBaseURL:NO].queryItems) {
+							if ([q.name isEqualToString:@"r"]) {
+								r = q.value ?: @"";
+							}
+						}
+						[me finish:mine state:[@"tab_done:" stringByAppendingString:r]];
+					} else if (error.code == ASWebAuthenticationSessionErrorCodeCanceledLogin) {
+						[me finish:mine state:@"tab_closed"];
+					} else {
+						[me finish:mine state:[NSString stringWithFormat:@"error:%ld %@", (long)error.code, error.localizedDescription]];
+					}
+				}];
+		w.presentationContextProvider = self;
+		self.web = w;
+		if (![w start]) {
+			self.web = nil;
+			[self finish:mine state:@"error:the sign-in sheet did not open"];
+		}
+	});
+	return YES;
+}
+
+- (void)cancel {
+	self.run = self.run + 1;
+	self.state = @"";
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (self.web) {
+			[self.web cancel];
+			self.web = nil;
+		}
+		if (self.apple) {
+			if (@available(iOS 16.0, *)) {
+				[self.apple cancel];
+			}
+			self.apple = nil;
+		}
+	});
+}
+
+@end
+
+static EARSignIn *ear_sign_in() {
+	static EARSignIn *s = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		s = [EARSignIn new];
+	});
+	return s;
+}
+
 #define EAR_HOST ((__bridge EARHost *)host)
 
 namespace godot {
@@ -587,6 +763,25 @@ bool EmeraldAR::share(const String &p_text, const String &p_title) {
 	return text != nil;
 }
 
+// 24 Nov 2026: sign in with Apple (Apple's own sheet) / Google, Facebook (the iPhone's sign-in sheet). See EARSignIn.
+bool EmeraldAR::appleSignIn(const String &p_nonce) {
+	return [ear_sign_in() appleWithNonce:[NSString stringWithUTF8String:p_nonce.utf8().get_data()]];
+}
+
+bool EmeraldAR::openAuthTab(const String &p_url, const String &p_status_url, const String &p_k) {
+	(void)p_status_url;   // (the sheet sees the end of the sign-in itself: the server ends it on emeraldbreak://auth)
+	(void)p_k;
+	return [ear_sign_in() openTab:[NSString stringWithUTF8String:p_url.utf8().get_data()]];
+}
+
+String EmeraldAR::signInState() {
+	return ear_str(ear_sign_in().state);
+}
+
+void EmeraldAR::signInCancel() {
+	[ear_sign_in() cancel];
+}
+
 String EmeraldAR::getLastError() {
 	return ear_str([EAR_HOST lastError]);
 }
@@ -638,6 +833,10 @@ void EmeraldAR::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("requestInstall"), &EmeraldAR::requestInstall);
 	ClassDB::bind_method(D_METHOD("openAppSettings"), &EmeraldAR::openAppSettings);
 	ClassDB::bind_method(D_METHOD("share", "text", "title"), &EmeraldAR::share);
+	ClassDB::bind_method(D_METHOD("appleSignIn", "nonce"), &EmeraldAR::appleSignIn);
+	ClassDB::bind_method(D_METHOD("openAuthTab", "url", "status_url", "k"), &EmeraldAR::openAuthTab);
+	ClassDB::bind_method(D_METHOD("signInState"), &EmeraldAR::signInState);
+	ClassDB::bind_method(D_METHOD("signInCancel"), &EmeraldAR::signInCancel);
 	ClassDB::bind_method(D_METHOD("getLastError"), &EmeraldAR::getLastError);
 	ClassDB::bind_method(D_METHOD("getInfo"), &EmeraldAR::getInfo);
 	ClassDB::bind_method(D_METHOD("start", "w", "h"), &EmeraldAR::start);

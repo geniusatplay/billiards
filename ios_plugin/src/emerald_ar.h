@@ -34,6 +34,10 @@ public:
 	bool requestInstall();
 	bool openAppSettings();
 	bool share(const String &p_text, const String &p_title);
+	bool appleSignIn(const String &p_nonce);
+	bool openAuthTab(const String &p_url, const String &p_status_url, const String &p_k);
+	String signInState();
+	void signInCancel();
 	String getLastError();
 	String getInfo();
 	bool start(int p_w, int p_h);

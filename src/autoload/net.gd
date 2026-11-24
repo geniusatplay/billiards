@@ -102,6 +102,7 @@ func api(action: String, body: Dictionary = {}, lane := "") -> Dictionary:
 			Game.progress["player"] = ""
 			Game.progress["token"] = ""
 			Game.progress.erase("email")
+			Game.progress.erase("provider")
 			Game.request_save()
 	return parsed
 
@@ -306,13 +307,22 @@ func creds() -> Dictionary:
 	return {"id": str(Game.progress.get("player", "")), "token": str(Game.progress.get("token", ""))}
 
 
-## Signed in to an account (an email) on this phone.
+## Signed in to an account on this phone (an email, or Google / Facebook / Apple).
 func signed_in() -> bool:
-	return registered() and email() != ""
+	return registered() and (email() != "" or provider() != "")
 
 
 func email() -> String:
 	return str(Game.progress.get("email", ""))
+
+
+## 24 Nov 2026: "google", "facebook" or "apple" for an account made by signing in with one of them; "" otherwise.
+func provider() -> String:
+	return str(Game.progress.get("provider", ""))
+
+
+static func provider_name(p: String) -> String:
+	return {"google": "Google", "facebook": "Facebook", "apple": "Apple"}.get(p, p)
 
 
 ## 24 Nov 2026: the account's username - the name other players see. "" until it is chosen.
@@ -386,6 +396,235 @@ func sign_up(mail: String, password: String, uname := "") -> Dictionary:
 	return r
 
 
+# ---------------------------------------------------------------- sign in with Google, Facebook or Apple (24 Nov 2026)
+## Randy: "add sign in with google or facebook on the apk which will fast create their account. and add ios on the
+## ios version", then "please do it the smoothe way with their sign in screens in app which doesnt need the browser".
+## In the order tried:
+##   1. the provider's own sheet over the game: Google's account sheet on Android 14+ (Credential Manager), Apple's
+##      on iPhones. It hands the game a signed token, which the server checks (api auth_native).
+##   2. the provider's sign-in page in a sheet / tab over the game (iPhone: the sign-in sheet; Android: an Auth Tab
+##      or Custom Tab), ended by the game's server - Facebook always, Google on older Androids, or when 1 can't.
+##   3. the phone's browser (a build without the plugin, a computer).
+## In 2 and 3 the game holds the secret behind the address it opened and collects the account from the server
+## (auth_poll). No provider code or secret is in the game. Which sign-ins are on is the server's say (a provider
+## goes live there, without a new version of the game).
+const AUTH_URL := "https://emeraldvortexgames.com/eb/auth/"
+const AUTH_WAIT := 900.0          # seconds a sign-in may take (the server keeps it as long)
+var providers := {}               # {"google": true, ...} as the server last said
+var google_client_id := ""        # the id Google's sheet asks a token for (the server's, from "providers")
+var apple_web := false            # Apple's sign-in page is on too (the fallback when Apple's sheet can't open)
+var _social_id := 0               # the sign-in being waited for; a new one or cancel_social() ends the old
+var _social_active := false
+var social_url := ""              # (tests: the address the sign-in page was opened at)
+var social_open := true           # (tests: false = don't open a browser)
+var social_way := ""              # how the last sign-in went: "sheet" (Google's), "apple", "tab", "browser"
+var signin_plugin: Object = null  # (tests: a stand-in for the EmeraldAR plugin's sign-in calls)
+var as_ios := false               # (tests: offer the sign-ins as on an iPhone)
+
+
+## Asks the server which sign-ins are switched on.
+func fetch_providers() -> Dictionary:
+	var r: Dictionary = await api("providers", {})
+	if r.get("ok", false) and typeof(r.get("providers")) == TYPE_DICTIONARY:
+		providers = r["providers"]
+		google_client_id = str(r.get("google_client_id", ""))
+		apple_web = r.get("apple_web", false) == true
+	return providers
+
+
+## The sign-ins this phone offers. On an iPhone, Google and Facebook come only with Apple beside them in the store
+## version (the App Store asks for Sign in with Apple wherever another sign-in like these is offered); Apple is
+## offered on iPhones only.
+## (ios / store: 1 or 0 to test as if on an iPhone / the store version; -1 = as this phone is)
+func offered_providers(ios_flag := -1, store_flag := -1) -> Array:
+	var out := []
+	var ios := _ios() if ios_flag < 0 else ios_flag == 1
+	var store := (not Game.dev_tools()) if store_flag < 0 else store_flag == 1
+	var apple: bool = ios and providers.get("apple", false) == true
+	for p in ["google", "facebook"]:
+		if providers.get(p, false) == true and (not ios or apple or not store):
+			out.append(p)
+	if apple:
+		out.append("apple")
+	return out
+
+
+func _ios() -> bool:
+	return OS.get_name() == "iOS" or as_ios
+
+
+## The plugin's sign-in calls (Android: android_plugin/.../SignIn.java, iPhone: ios_plugin/src/emerald_ar.mm).
+func _sign_plugin() -> Object:
+	if signin_plugin != null:
+		return signin_plugin
+	if OS.get_name() in ["Android", "iOS"] and Engine.has_singleton("EmeraldAR"):
+		return Engine.get_singleton("EmeraldAR")
+	return null
+
+
+## True when the sign-in happens over the game (a sheet or tab), not in the phone's browser.
+func social_in_app() -> bool:
+	return _sign_plugin() != null
+
+
+## Signs in with a provider (see above) and waits (up to 15 minutes) for the account. Returns the server's reply as
+## log_in / sign_up do ({ok, ...} with new / need_name / suggest), or {error: cancelled / expired / failed / ...}.
+func social_sign_in(p: String, rules := false) -> Dictionary:
+	var k := Crypto.new().generate_random_bytes(32).hex_encode()
+	var h := k.sha256_text()
+	_social_id += 1
+	var mine := _social_id
+	_social_active = true
+	var plug := _sign_plugin()
+	var ios := _ios()
+	# 1. the provider's own sheet
+	var sheet := ""
+	if plug != null:
+		if p == "google" and not ios and google_client_id != "" and plug.call("googleSheet", google_client_id, h) == true:
+			sheet = "sheet"
+		elif p == "apple" and ios and plug.call("appleSignIn", h) == true:
+			sheet = "apple"
+	print("[net] sign in with %s: %s" % [p, sheet if sheet != "" else ("no sheet here" if plug != null else "no plugin")])
+	if sheet != "":
+		social_way = sheet
+		var st := await _sign_state(plug, mine, ["busy", ""])
+		print("[net] %s sheet: %s" % [p, "token" if st.begins_with("token:") else st.substr(0, 80)])
+		if mine != _social_id:
+			return {"ok": false, "error": "cancelled"}
+		plug.call("signInCancel")
+		if st.begins_with("token:"):
+			var parts := st.substr(6).split("\n")
+			var body := {"provider": p, "id_token": parts[0], "k": k}
+			if parts.size() > 1 and parts[1].strip_edges() != "":
+				body["given"] = parts[1].strip_edges()
+			var rn := {}
+			for i in 3:
+				if rules:
+					body["rules"] = true
+				if registered():
+					body.merge(creds(), true)
+				rn = await api("auth_native", body)
+				if mine != _social_id:
+					return {"ok": false, "error": "cancelled"}
+				if rn.get("ok", false) or not str(rn.get("error", "")) in ["offline", "bad reply"]:
+					break
+				await get_tree().create_timer(1.5).timeout
+			if not rn.get("ok", false) and str(rn.get("error", "")) in ["refused", "off"]:
+				rn = {"ok": false, "error": "failed"}
+			return await _social_end(mine, rn)
+		if st == "cancel":
+			return await _social_end(mine, {"ok": false, "error": "cancelled"})
+		print("[net] %s sheet: %s - the sign-in page instead" % [p, st])
+		if p == "apple" and not apple_web:
+			return await _social_end(mine, {"ok": false, "error": "failed"})
+	# 2. the sign-in page over the game, 3. in the browser
+	social_url = AUTH_URL + "?p=%s&h=%s&l=%s" % [p, h, Loc.current()]
+	var tab := false
+	if plug != null:
+		var u := social_url + ("&cb=1" if ios else "&cb=2")
+		if plug.call("openAuthTab", u, url + "?a=auth_status", k) == true:
+			tab = true
+			social_url = u
+	social_way = "tab" if tab else "browser"
+	print("[net] %s sign-in page: %s" % [p, social_way])
+	if not tab and social_open:
+		OS.shell_open(social_url)
+	var t0 := Time.get_ticks_msec()
+	var r := {"ok": false, "error": "expired"}
+	var waited := 0.0
+	var next_ask := 1.5
+	var ended_seen := 0
+	while mine == _social_id and Time.get_ticks_msec() - t0 < AUTH_WAIT * 1000.0:
+		await get_tree().create_timer(0.25).timeout
+		if mine != _social_id:
+			break
+		waited += 0.25
+		# the sheet / tab tells when it closed: then the server is asked at once
+		var st := str(plug.call("signInState")) if tab else ""
+		if tab and st.begins_with("error:"):
+			print("[net] %s sign-in page: %s - the browser instead" % [p, st])
+			plug.call("signInCancel")
+			tab = false
+			social_way = "browser"
+			social_url = AUTH_URL + "?p=%s&h=%s&l=%s" % [p, h, Loc.current()]
+			if social_open:
+				OS.shell_open(social_url)
+			continue
+		var ended := tab and (st == "tab_closed" or st.begins_with("tab_done:"))
+		if waited < next_ask and not ended:
+			continue
+		next_ask = waited + 1.5
+		var body := {"k": k}
+		if rules:
+			body["rules"] = true
+		if registered():
+			body.merge(creds())
+		var got: Dictionary = await api("auth_poll", body)
+		if mine != _social_id:
+			break
+		if got.get("ok", false) and got.get("waiting", false):
+			if ended:
+				ended_seen += 1
+				if ended_seen >= 2:          # (closed, and the server has nothing: closed before signing in)
+					r = {"ok": false, "error": "cancelled" if st == "tab_closed" else "failed"}
+					break
+			continue
+		if ended and str(got.get("error", "")) == "expired":
+			# (closed before the sign-in page had even loaded, e.g. "Cancel" on the iPhone's "wants to sign in" question)
+			r = {"ok": false, "error": "cancelled" if st == "tab_closed" else "failed"}
+			break
+		if not got.get("ok", false) and str(got.get("error", "")) in ["offline", "bad reply", "unknown player"]:
+			continue            # (no answer just now: the phone may have been asleep while the browser was open)
+		r = got
+		break
+	if tab:
+		plug.call("signInCancel")
+	if mine != _social_id:
+		return {"ok": false, "error": "cancelled"}       # (Cancel, or a newer sign-in took over)
+	return await _social_end(mine, r)
+
+
+## Waits while the plugin's sign-in state is one of `waiting`; returns the state it ends in.
+func _sign_state(plug: Object, mine: int, waiting: Array) -> String:
+	var t0 := Time.get_ticks_msec()
+	while mine == _social_id and Time.get_ticks_msec() - t0 < AUTH_WAIT * 1000.0:
+		var st := str(plug.call("signInState"))
+		if not st in waiting:
+			return st
+		await get_tree().create_timer(0.1).timeout
+	return "error:timeout"
+
+
+func _social_end(mine: int, r: Dictionary) -> Dictionary:
+	print("[net] sign-in ends: %s" % ("signed in" if r.get("ok", false) else str(r.get("error", "?"))))
+	if mine != _social_id:
+		return {"ok": false, "error": "cancelled"}
+	_social_active = false
+	if r.get("ok", false):
+		_use_account(r)
+		if r.get("new", false):
+			push_progress()           # (a new account: this phone's progress is the account's)
+		else:
+			await pull_progress()     # (an account made before: as logging in)
+			push_progress()
+	return r
+
+
+## Stops waiting for a sign-in (the player tapped Cancel).
+func cancel_social() -> void:
+	if _social_active:
+		print("[net] sign-in stopped (Cancel, or the screen was left)")
+	_social_id += 1
+	_social_active = false
+	var plug := _sign_plugin()
+	if plug != null:
+		plug.call("signInCancel")
+
+
+func social_waiting() -> bool:
+	return _social_active
+
+
 ## Logs this phone in to an account: from now on it plays as that account's player. Of the two copies of the
 ## progress (the account's on the server, this phone's) the one further along is kept, as at every start.
 func log_in(mail: String, password: String) -> Dictionary:
@@ -408,10 +647,14 @@ func log_out() -> void:
 	_forget_account()
 
 
-## Deletes the account for good (the server asks for the password once more).
+## Deletes the account for good (the server asks for the password once more; an account made with Google,
+## Facebook or Apple has none: the player confirmed on the screen instead).
 func delete_account(password: String) -> Dictionary:
 	var body := creds()
-	body["password"] = password
+	if provider() != "":
+		body["confirm"] = true
+	else:
+		body["password"] = password
 	var r: Dictionary = await api("delete_account", body)
 	if r.get("ok", false):
 		_forget_account()
@@ -422,6 +665,7 @@ func _use_account(r: Dictionary) -> void:
 	Game.progress["player"] = str(r["id"])
 	Game.progress["token"] = str(r["token"])
 	Game.progress["email"] = str(r.get("email", ""))
+	Game.progress["provider"] = str(r.get("provider", ""))
 	Game.progress["username"] = str(r.get("username", ""))
 	Game.progress["need_name"] = r.get("need_name", false) == true
 	if username() != "":
@@ -449,6 +693,9 @@ static func account_error(r: Dictionary) -> String:
 		"email_taken": return "There is already an account with this email. Log in instead."
 		"wrong_login": return "Wrong email or password."
 		"too_many_tries": return "Too many wrong passwords. Try again in 15 minutes."
+		"cancelled": return "Sign-in was cancelled."
+		"expired": return "This sign-in has expired."
+		"failed": return "Something went wrong with the sign-in."
 	return "The game server cannot be reached. Check your internet connection and try again."
 
 
