@@ -475,6 +475,7 @@ func hud_setup(cfg: Dictionary) -> void:
 	hud.move_child(layer, hud.get_child_count() - 1)
 	hud.pause_requested.connect(pause)
 	game.game_over.connect(_on_game_over)
+	game.match_void.connect(_on_match_void)
 	game.rack_cleared.connect(_on_rack_cleared)
 	game.begin()
 	FpsCounter.mark("match built")
@@ -558,6 +559,17 @@ func after_results(action: String) -> void:
 		Ads.show("after_match", carry_on)
 	else:
 		carry_on.call()
+
+
+## Online: the other player left the ready-up just as this phone started the match (no shot played): no match, no
+## XP; back to Play Online, looking for another opponent (as when they leave during the ready-up).
+func _on_match_void() -> void:
+	(func():
+		quit_to("menu")
+		go("online")
+		if _screen is MenuScreens.OnlineScreen:
+			_screen.set("_note", "Your opponent left before the match. Looking for another opponent…")
+			_screen.call("_search")).call_deferred()
 
 
 func quit_to(where: String) -> void:
@@ -2280,7 +2292,7 @@ func _tour_step(dir: String, s: String) -> void:
 				chk.call("the Ready button: green, a lighter green gradient, a light green outline", rb.is_visible_in_tree() and rb.text == "Ready" and sb is GradientBox
 					and (sb as GradientBox).top.v > (sb as GradientBox).bottom.v and (sb as GradientBox).top.g > 0.8 and (sb as GradientBox).border > 0.0 and (sb as GradientBox).border_color.g > 0.9,
 					"%s -> %s, outline %s" % [str((sb as GradientBox).top.to_html(false)) if sb is GradientBox else "?", str((sb as GradientBox).bottom.to_html(false)) if sb is GradientBox else "", str((sb as GradientBox).border_color.to_html(false)) if sb is GradientBox else ""])
-				chk.call("not ready: 'The match starts in 20 s'", stl.is_visible_in_tree() and stl.text == L.t("The match starts in %d s") % 20, stl.text)
+				chk.call("not ready: 'The match starts in 20 s'", stl.is_visible_in_tree() and (stl.text == L.t("The match starts in %d s") % 20 or stl.text == L.t("The match starts in %d s") % 19), stl.text)
 				await _shot(dir, "ready_1_found")
 				sc.call("test_hold", false)
 				var t_press := Time.get_ticks_msec()
@@ -2302,6 +2314,18 @@ func _tour_step(dir: String, s: String) -> void:
 				chk.call("then the stand-in is ready and the match starts, against the same name", game != null and not game.fill_in.is_empty() and str(game.player_names[1]) == nm_ready, str(game.player_names[1]) if game else "")
 				if game:
 					await _wait(1.0)
+					# a username of the longest kind is made smaller on its card, not cut (24 Nov 2026)
+					game.fill_in["name"] = "lethokuhle.kumar"
+					hud.call("on_language_changed")
+					await _wait(0.3)
+					var fits := true
+					var sizes := []
+					for c in (hud.get("_cards") as Array):
+						var nl: Label = c["name"]
+						var fsz := nl.get_theme_font_size("font_size")
+						sizes.append(fsz)
+						fits = fits and nl.get_theme_font("font").get_string_size(nl.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsz).x <= nl.size.x + 1.0
+					chk.call("a 16-letter username fits its card in the match (font sizes %s)" % str(sizes), fits and sizes.size() == 2 and int(sizes[1]) < 34 and int(sizes[0]) == 34, "")
 					await _shot(dir, "ready_3_match")
 			_end_match()
 			# --- nobody taps Ready: the match starts by itself (the 20 s shortened to 4 here)
@@ -2354,11 +2378,29 @@ func _tour_step(dir: String, s: String) -> void:
 					await _wait(0.1)
 					w4 += 0.1
 				chk.call("both ready -> the online match starts at once", game != null and game.online and w4 < 1.5, "%.1f s" % w4)
+				# ... and then they leave the ready-up a moment too late (their Back crossed the start): no match here
+				var xp_v := Game.xp()
+				var played := int(Game.progress.get("matches", 0))
+				ghost._send("cancel", {})
 				for k in 4:
 					srv.now = Time.get_ticks_msec() / 1000.0
 					ghost.tick("Ghost", 9000, Net.ONLINE_VERSION)
 					await _wait(0.2)
+				ghost.left = true
 				chk.call("the other phone was told this player is ready", ghost.readies_seen == 1, str(ghost.readies_seen))
+				var w8 := 0.0
+				var sv: Control = null
+				while w8 < 10.0:
+					srv.now = Time.get_ticks_msec() / 1000.0
+					sv = scr_of.call()
+					if sv and str((sv.find_child("OnlineStatus", true, false) as Label).text).begins_with(L.t("Your opponent left before the match. Looking for another opponent…")):
+						break
+					await _wait(0.1)
+					w8 += 0.1
+				chk.call("they leave as the match begins (no shot played) -> no match, no win, no XP; looking again", game == null and sv != null and bool(sv.get("_searching")) and w8 < 10.0
+					and Game.xp() == xp_v and int(Game.progress.get("matches", 0)) == played, "")
+				if sv:
+					sv.call("_cancel")
 			else:
 				chk.call("a player found: the ready-up", false, "")
 			_end_match()

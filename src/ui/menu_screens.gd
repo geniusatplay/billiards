@@ -919,6 +919,7 @@ class OnlineScreen extends Screen:
 	func _opp_left() -> void:
 		_readying = false
 		if is_instance_valid(_m):
+			_m.send("cancel", {})      # (a phone that only went quiet learns it when it comes back: no match there either)
 			_m.close()
 		_m = null
 		_end_ready_ui()

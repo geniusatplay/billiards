@@ -13,6 +13,7 @@ signal shot_fired
 signal stats_changed
 signal ball_potted(number: int, shooter: int)    # a ball dropped (0 = the cue ball), as it drops
 signal groups_set                                 # the table stopped being open: rules.groups says who has which
+signal match_void                                 # online: the other player left the ready-up as this match began (no match)
 
 enum State { SETUP, PLACE_TABLE, AIM, BALL_IN_HAND, ROLLING, AI_THINK, OVER }
 
@@ -1159,7 +1160,12 @@ func _net_tick(_delta: float) -> void:
 					reason = L.t("%s ran out of time") % player_names[1 - w]
 				_finish(w, reason, w == net_seat and why != "time")
 			"cancel":
-				# they left the ready-up just as this phone started the match (24 Nov 2026): as if they left it
+				# they left the ready-up (24 Nov 2026) just as this phone started the match: if nobody has played a
+				# shot, there was no match - nobody wins, no XP, back to looking (main._on_match_void)
+				if shots_total == 0:
+					_set_state(State.OVER)
+					match_void.emit()
+					return
 				rules.winner = net_seat
 				_finish(net_seat, "Your opponent left the match", true)
 			"aim":
