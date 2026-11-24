@@ -101,9 +101,40 @@ static func account_card(parent: Control, router: Node) -> void:
 		buttons.add_child(login)
 		acc.add_child(buttons)
 		return
-	var who := UIKit.label(L.t("Signed in as %s") % Net.email(), "")
+	# 24 Nov 2026: the username (what other players see), changed here
+	var urow := UIKit.hbox(14)
+	urow.name = "SettingsUsername"
+	var uname := UIKit.label(L.t("Username: %s") % (Net.username() if Net.username() != "" else L.t("not chosen yet")), "H3Label")
+	uname.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	uname.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	uname.clip_text = true
+	urow.add_child(uname)
+	var change := UIKit.button("Change", "", "user")
+	change.name = "SettingsChangeUsername"
+	change.pressed.connect(func(): router.call("go", "account_name"))
+	urow.add_child(change)
+	acc.add_child(urow)
+	var who := UIKit.label(L.t("Signed in as %s") % Net.email(), "MutedLabel")
 	who.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED      # already translated, with the email in it
 	acc.add_child(who)
+	# blocked players, each with Unblock (both stores ask that blocking can be undone by the player)
+	var blocked: Dictionary = Game.progress.get("blocked", {})
+	if not blocked.is_empty():
+		acc.add_child(UIKit.label("Blocked players", "H3Label"))
+		for pid in blocked:
+			var br := UIKit.hbox(12)
+			var bn := UIKit.label(str(blocked[pid]), "")
+			bn.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			bn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			br.add_child(bn)
+			var ub := UIKit.button("Unblock", "ChipButton")
+			var target: String = pid
+			var tname := str(blocked[pid])
+			ub.pressed.connect(func():
+				await Net.block_player(target, tname, false)
+				router.call("go", "settings", true))
+			br.add_child(ub)
+			acc.add_child(br)
 	var out := UIKit.button("Sign out", "", "", 300)
 	out.pressed.connect(func():
 		Sfx.ui("tap")
@@ -317,7 +348,14 @@ class SettingsScreen extends MenuScreens.Screen:
 		pp.name = "PrivacyPolicy"
 		pp.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		pp.pressed.connect(func(): OS.shell_open(Net.PRIVACY_URL))
-		body.add_child(pp)
+		var links := UIKit.hbox(16)
+		links.add_child(pp)
+		var pr := UIKit.button("Player rules", "GhostButton", "flag")
+		pr.name = "PlayerRules"
+		pr.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		pr.pressed.connect(func(): OS.shell_open(AccountScreen.RULES_URL))
+		links.add_child(pr)
+		body.add_child(links)
 		var credits := UIKit.label(L.t("%s v%s · © Emerald Vortex Games LLC · Fonts: Outfit and Noto Sans (SIL Open Font License). Table sound recordings: \"Pool And Billiards SFX\" by Suraj Kispotta (CC0).") % [Game.TITLE, Game.VERSION], "SmallLabel")
 		credits.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		body.add_child(credits)

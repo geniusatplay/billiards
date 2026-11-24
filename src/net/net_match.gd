@@ -14,6 +14,7 @@ extends Node
 var match_id := 0
 var seat := 0              # 0 breaks
 var host := false          # this phone has the faster connection: it is the match's referee
+var opp_id := ""           # the other player's id (report / block)
 var match_seed := 0        # both phones rack the balls from this
 var opp := {}              # the other player: name, level, cue
 var fast := false          # poll quickly (waiting for the other player's shot)
@@ -39,6 +40,7 @@ static func from_reply(r: Dictionary) -> NetMatch:
 	m.host = bool(r.get("host", false))
 	m.match_seed = int(r.get("seed", 1))
 	m.opp = r.get("opp", {})
+	m.opp_id = str(r.get("opp_id", ""))      # (24 Nov 2026: to report or block them)
 	return m
 
 

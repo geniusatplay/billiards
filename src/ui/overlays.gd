@@ -47,16 +47,20 @@ class PauseMenu extends Control:
 		var v := UIKit.vbox(14)
 		v.custom_minimum_size = Vector2(560, 0)
 		cols.add_child(v)
-		var items := [["Resume", "play", "resume", "PrimaryButton"], ["Restart", "refresh", "restart", ""]]
+		# 24 Nov (Randy: "at the settings page, Main Menu should be on top"): the way out first; leaving a match that
+		# pays XP asks first (main.quit_match -> Overlays.Confirm)
+		var items := [["Main menu", "home", "quit_match", "GhostButton"], ["Resume", "play", "resume", "PrimaryButton"],
+			["Restart", "refresh", "restart", ""]]
 		if router.call("is_online"):
-			items.remove_at(1)      # an online match cannot be restarted, and the clock keeps running
+			items.remove_at(2)      # an online match cannot be restarted, and the clock keeps running
+			items.append(["Report or block player", "flag", "player_card", ""])     # (24 Nov 2026: app store rules)
 		items.append([_music_text(), "sound", "toggle_music", ""])
 		items.append(["Settings", "gear", "settings", ""])
 		if Game.dev_tools():
 			items.append(["Debug menu", "debug", "open_debug", ""])      # (not in the store builds)
-		items.append(["Quit to menu", "home", "quit_match", "GhostButton"])
 		for it in items:
 			var b := UIKit.button(it[0], it[3], it[1], 560)
+			b.name = "Pause_" + str(it[2])
 			var act: String = it[2]
 			b.pressed.connect(func():
 				if act == "toggle_music":
@@ -228,7 +232,8 @@ class Results extends Control:
 		var re := UIKit.button("New opponent" if online else "Rematch", "PrimaryButton", "globe" if online else "refresh", 340)
 		re.pressed.connect(func(): router.call("after_results", "online" if online else "restart"))
 		row2.add_child(re)
-		var mn2 := UIKit.button("Menu", "GhostButton", "home", 260)
+		var mn2 := UIKit.button("Main menu", "GhostButton", "home", 300)
+		mn2.name = "ResultsMainMenu"
 		mn2.pressed.connect(func(): router.call("after_results", "menu"))
 		row2.add_child(mn2)
 		# made with its text so the button keeps room for the gift picture (the number is filled in when it appears)
@@ -238,6 +243,14 @@ class Results extends Control:
 		_pk_btn.visible = false
 		row2.add_child(_pk_btn)
 		v.add_child(row2)
+		if online:
+			var rp := UIKit.button(L.t("Report or block %s") % str(res.get("opp_name", "")), "GhostButton", "flag")
+			rp.name = "ResultsReport"
+			rp.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			rp.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			rp.add_theme_font_size_override("font_size", 24)
+			rp.pressed.connect(func(): router.call("player_card"))
+			v.add_child(rp)
 		UIKit.center_in(self, card)
 		UIKit.fade_in(card, 0.3, 40)
 		if not you_lost:
@@ -255,7 +268,7 @@ class Results extends Control:
 		var bv := UIKit.vbox(2)
 		box.add_child(bv)
 		var lines := [[L.t("Balls potted × %d") % int(x["balls"]), int(x["ball_xp"])], ["Streak bonus", int(x["streak_xp"])], ["Combo bonus", int(x["combo_xp"])],
-			["8-ball", int(x["eight_xp"])], ["Win bonus", int(x["win_xp"])]]
+			["8-ball", int(x["eight_xp"])], ["Opponent left: the rest of the rack", int(x.get("forfeit_xp", 0))], ["Win bonus", int(x["win_xp"])]]
 		var shown: Array = []
 		for ln in lines:
 			if int(ln[1]) <= 0:
@@ -390,10 +403,183 @@ class RackCleared extends Results:
 		var again := UIKit.button("Rack again", "PrimaryButton", "refresh", 340)
 		again.pressed.connect(func(): router.call("after_results", "rerack"))
 		row.add_child(again)
-		var mn := UIKit.button("Menu", "GhostButton", "home", 260)
+		var mn := UIKit.button("Main menu", "GhostButton", "home", 300)
 		mn.pressed.connect(func(): router.call("after_results", "menu"))
 		row.add_child(mn)
 		v.add_child(row)
 		UIKit.center_in(self, card)
 		UIKit.fade_in(card, 0.3, 40)
 		_confetti()
+
+
+## ------------------------------------------------------------ a yes / no question over everything
+## 24 Nov (Randy: "if in a match, a popup confirmation saying something like they are in a match and they wont get
+## any xp for the match"). `on_yes` runs when the first button is pressed; the second (the safe one, lit) just closes.
+class Confirm extends Control:
+	var _title: String
+	var _text: String
+	var _yes: String
+	var _no: String
+	var _on_yes: Callable
+
+	func _init(title: String, text: String, yes: String, no: String, on_yes: Callable) -> void:
+		_title = title
+		_text = text
+		_yes = yes
+		_no = no
+		_on_yes = on_yes
+		name = "Confirm"
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		process_mode = Node.PROCESS_MODE_ALWAYS
+
+	func _ready() -> void:
+		var bg := ColorRect.new()
+		bg.color = Color(0.01, 0.02, 0.05, 0.72)
+		UIKit.fullrect(bg)
+		bg.mouse_filter = Control.MOUSE_FILTER_STOP
+		add_child(bg)
+		var card := UIKit.panel()
+		card.custom_minimum_size = Vector2(820, 0)
+		var v := UIKit.vbox(22)
+		card.add_child(v)
+		var head := UIKit.hbox(16)
+		head.add_child(IconGlyph.make("flag", 52, UIKit.GOLD))
+		var t := UIKit.label(_title, "H2Label")
+		t.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		head.add_child(t)
+		v.add_child(head)
+		var body := UIKit.label(_text, "")
+		body.name = "ConfirmText"
+		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.custom_minimum_size.x = 760
+		v.add_child(body)
+		var row := HFlowContainer.new()
+		row.alignment = FlowContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("h_separation", 18)
+		row.add_theme_constant_override("v_separation", 14)
+		var yes := UIKit.button(_yes, "GhostButton", "home", 340)
+		yes.name = "ConfirmYes"
+		for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+			yes.add_theme_color_override(c, UIKit.CORAL)
+		yes.pressed.connect(func():
+			Sfx.ui("tap")
+			queue_free()
+			_on_yes.call())
+		row.add_child(yes)
+		var no := UIKit.button(_no, "PrimaryButton", "play", 340)
+		no.name = "ConfirmNo"
+		no.pressed.connect(func():
+			Sfx.ui("back")
+			queue_free())
+		row.add_child(no)
+		v.add_child(row)
+		UIKit.center_in(self, card)
+		UIKit.fade_in(card, 0.15, 16)
+
+
+## ------------------------------------------------------------ report or block the other player
+## 24 Nov 2026 (both app stores, for games where players see each other's names: a way to report a player and to
+## block them). From the pause menu and the score screen of an online match. A stand-in opponent (Play Online found
+## nobody) gets the very same card; its report goes nowhere and blocking it keeps that name out of later matches.
+class PlayerCard extends Control:
+	var router: Node
+	var _name: String
+	var _id: String          # "" = a stand-in
+	var _block_b: Button
+	var _note: Label
+
+	func _init(p_router: Node, opp_name: String, opp_id: String) -> void:
+		router = p_router
+		_name = opp_name
+		_id = opp_id
+		name = "PlayerCard"
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		process_mode = Node.PROCESS_MODE_ALWAYS
+
+	func _blocked() -> bool:
+		return Net.is_blocked(_id) if _id != "" else _name in Game.progress.get("blocked_names", [])
+
+	func _ready() -> void:
+		var bg := ColorRect.new()
+		bg.color = Color(0.01, 0.02, 0.05, 0.72)
+		UIKit.fullrect(bg)
+		bg.mouse_filter = Control.MOUSE_FILTER_STOP
+		bg.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed:
+				queue_free())
+		add_child(bg)
+		var card := UIKit.panel()
+		card.custom_minimum_size = Vector2(860, 0)
+		var v := UIKit.vbox(16)
+		card.add_child(v)
+		var head := UIKit.hbox(16)
+		head.add_child(IconGlyph.make("user", 56, UIKit.EMERALD))
+		var t := UIKit.label(_name, "H2Label")
+		t.name = "PlayerCardName"
+		t.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED       # (a username)
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		t.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		head.add_child(t)
+		var close := UIKit.icon_button("close", 80, "Close")
+		close.pressed.connect(func():
+			Sfx.ui("back")
+			queue_free())
+		head.add_child(close)
+		v.add_child(head)
+		var why := UIKit.label("Report this player if their username is offensive or they play unfairly. Block them and you won't be matched with them again.", "MutedLabel")
+		why.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		why.custom_minimum_size.x = 800
+		v.add_child(why)
+		var row := HFlowContainer.new()
+		row.add_theme_constant_override("h_separation", 14)
+		row.add_theme_constant_override("v_separation", 12)
+		for rr in [["Offensive username", "name"], ["Cheating", "cheating"], ["Something else", "other"]]:
+			var b := UIKit.button(rr[0], "ChipButton", "flag")
+			b.name = "Report_" + str(rr[1])
+			var reason: String = rr[1]
+			b.pressed.connect(func(): _report(reason))
+			row.add_child(b)
+		v.add_child(UIKit.label("Report", "H3Label"))
+		v.add_child(row)
+		_block_b = UIKit.button("", "GhostButton", "lock", 420)
+		_block_b.name = "PlayerCardBlock"
+		for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+			_block_b.add_theme_color_override(c, UIKit.CORAL)
+		_block_b.pressed.connect(_toggle_block)
+		v.add_child(_block_b)
+		_note = UIKit.label("", "SmallLabel")
+		_note.name = "PlayerCardNote"
+		_note.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED     # (put together translated, with a name)
+		_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(_note)
+		_refresh()
+		UIKit.center_in(self, card)
+		UIKit.fade_in(card, 0.15, 16)
+
+	func _refresh() -> void:
+		_block_b.text = "Unblock player" if _blocked() else "Block player"
+
+	func _report(reason: String) -> void:
+		Sfx.ui("tap")
+		if _id != "":
+			Net.report_player(_id, reason)
+		_note.text = L.t("Thanks for the report. We'll look into it.")
+		router.call("toast", L.t("Thanks for the report. We'll look into it."))
+
+	func _toggle_block() -> void:
+		Sfx.ui("toggle")
+		var on := not _blocked()
+		if _id != "":
+			Net.block_player(_id, _name, on)
+		else:
+			var names: Array = Game.progress.get("blocked_names", [])
+			if on and not _name in names:
+				names.append(_name)
+			elif not on:
+				names.erase(_name)
+			Game.progress["blocked_names"] = names
+			Game.request_save()
+		_note.text = L.t("Blocked. You won't be matched with %s again.") % _name if on else L.t("%s is no longer blocked.") % _name
+		_refresh()

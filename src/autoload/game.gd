@@ -66,7 +66,7 @@ const DEFAULTS := {
 	# and where an AR table goes down: metres further from (+) or nearer to (-) the spot the phone points at
 	"cam_zoom": 1.0, "ar_push": 0.0, "tut_version": -1,
 	# v1.1.15: when the share popup was last shown (unix seconds); the tutorial was started by itself once
-	"share_last": 0, "tutorial_offered": false,
+	"share_last": 0, "tutorial_offered": false, "last_match_day": "",
 	"onboarded": {}, "first_run": true,
 }
 
@@ -149,6 +149,9 @@ const DEFAULT_NAMES := ["Player 1", "Player 2"]
 
 func player_name(i: int) -> String:
 	var n := str(get_s("p%d_name" % (i + 1)))
+	# 24 Nov 2026: signed in, the first player is the account's username (unless a name was typed for local play)
+	if i == 0 and n in DEFAULT_NAMES and str(progress.get("username", "")) != "":
+		return str(progress["username"])
 	return L.t(n) if n in DEFAULT_NAMES else n
 
 
@@ -489,6 +492,7 @@ func open_chest() -> Dictionary:
 ## on), so the first match of a session never has one before it.
 func count_match() -> void:
 	progress["matches"] = int(progress.get("matches", 0)) + 1
+	settings["last_match_day"] = today()      # (24 Nov 2026: the share popup waits for a match today)
 	request_save()
 
 

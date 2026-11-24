@@ -105,6 +105,11 @@ class Tracker extends RefCounted:
 	var won := false
 	var best_streak := 0
 	var match_shots := 0     # shots played in the match by both players (for the smallest win bonus)
+	## 24 Nov (Randy: "if the opponent quits, the other team wins & gets points for the match like a win"): the other
+	## player left, so the rest of the rack counts as cleared - each of this player's balls still on the table and
+	## the 8-ball, as if they had potted them - and the win bonus is worked out on that.
+	var forfeit := false
+	var forfeit_balls := 7
 
 	## After each of the player's shots. `potted`: own balls that went down without a foul.
 	func shot(potted: int, sank_eight := false) -> void:
@@ -135,10 +140,18 @@ class Tracker extends RefCounted:
 	func win_floor() -> float:
 		return XP.WIN_MIN * float(clampi(match_shots, 1, XP.WIN_MIN_SHOTS)) / float(XP.WIN_MIN_SHOTS)
 
+	## What the rest of the rack is worth when the other player left: their own balls left and the 8-ball.
+	func forfeit_xp() -> float:
+		if not (won and forfeit):
+			return 0.0
+		return XP.PER_BALL * float(clampi(forfeit_balls, 0, 7)) + (XP.EIGHT if eight_xp <= 0.0 else 0.0)
+
 	## The lines of the score screen and the final sum for a mode ("online", "cpu", "local", "practice").
 	func summary(mode: String) -> Dictionary:
 		var f := float(XP.MODE_FACTOR.get(mode, 0.0))
-		var win_xp := maxf(earned() * XP.WIN_BONUS, win_floor()) if won else 0.0
-		var total := int(round((earned() + win_xp) * f))
+		var rest := forfeit_xp()
+		var win_xp := maxf((earned() + rest) * XP.WIN_BONUS, win_floor()) if won else 0.0
+		var total := int(round((earned() + rest + win_xp) * f))
 		return {"balls": balls, "ball_xp": int(round(ball_xp * f)), "streak_xp": int(round(streak_xp * f)), "combo_xp": int(round(combo_xp * f)),
-			"eight_xp": int(round(eight_xp * f)), "win_xp": int(round(win_xp * f)), "factor": f, "total": total, "best_streak": best_streak, "mode": mode}
+			"eight_xp": int(round(eight_xp * f)), "forfeit_xp": int(round(rest * f)), "win_xp": int(round(win_xp * f)), "factor": f,
+			"total": total, "best_streak": best_streak, "mode": mode}

@@ -97,6 +97,12 @@ func _ready() -> void:
 		go("menu")
 		if not Net.signed_in() and not OS.get_cmdline_user_args().has("--offline"):
 			go("account")        # v1.1.13: ask for an account at every start until this phone is signed in
+		elif Net.need_name():
+			go("account_name")   # (24 Nov 2026: an account without a username chooses one first)
+		Net.name_needed.connect(func():
+			# the server says this account has no username (made before usernames, or a moderator took it away)
+			if game == null and not (_screen is AccountScreen):
+				go("account_name"))
 		print("[boot] menu built at %d ms" % Time.get_ticks_msec())
 		await RenderingServer.frame_post_draw
 		print("[boot] first frame drawn at %d ms" % Time.get_ticks_msec())
@@ -312,7 +318,8 @@ func _show(name: String) -> void:
 		"settings": s = SettingsScreens.SettingsScreen.new(self)
 		"help": s = MenuScreens.HelpScreen.new(self)
 		"account": s = AccountScreen.new(self)
-		"account_login": s = AccountScreen.new(self, true)
+		"account_login": s = AccountScreen.new(self, AccountScreen.Mode.LOGIN)
+		"account_name": s = AccountScreen.new(self, AccountScreen.Mode.NAME)
 		"place_world": s = WorldScreens.PlaceWorldScreen.new(self)
 		_: s = MenuScreens.MainMenu.new(self)
 	_screen = s
@@ -492,8 +499,38 @@ func restart() -> void:
 	start_match(_last_cfg.duplicate())
 
 
+## Pause menu / score screen -> "Report or block": the other player's card (24 Nov 2026).
+func player_card() -> void:
+	if game == null:
+		return
+	var o: Array = game.opponent()
+	overlay_host.add_child(Overlays.PlayerCard.new(self, str(o[0]), str(o[1])))
+
+
+## A "Leave the match?" question still open (the match ended under it): gone.
+func _close_confirm() -> void:
+	for c in overlay_host.get_children():
+		if c is Overlays.Confirm:
+			c.queue_free()
+
+
+
+## Pause menu -> Main menu. A match that pays XP (online, a stand-in opponent, against the CPU) asks first: leaving
+## gives no XP for it, and online the other player gets the win (24 Nov, Randy).
 func quit_match() -> void:
-	quit_to("menu")
+	if not leave_needs_asking():
+		quit_to("menu")
+		return
+	var text := "You're in a match. If you leave now, you won't get any XP for this match."
+	if game.looks_online():
+		text = "You're in a match. If you leave now, you won't get any XP for this match, and your opponent gets the win."
+	overlay_host.add_child(Overlays.Confirm.new("Leave the match?", text, "Leave match", "Keep playing",
+		func(): quit_to("menu")))
+
+
+func leave_needs_asking() -> bool:
+	return game != null and game.mode == "versus" and not game.tutorial and game.state != PoolGame.State.OVER \
+		and game.xp_mode() in ["online", "cpu"]
 
 
 ## Leaving the score screen: "restart", "rerack", "menu", "packages" or "online". The between-matches advert comes first
@@ -631,10 +668,12 @@ func pause_and_open(name: String) -> void:
 
 
 func _on_game_over(res: Dictionary) -> void:
+	_close_confirm()          # (the match is over: "Leave the match?" no longer applies)
 	if res.has("xp"):
 		# the XP is banked at once (so quitting during the score screen loses nothing); the screen animates it
 		res["gain"] = Game.add_xp(int(res["xp"]["total"]))
 	Game.count_match()
+	matches_this_launch += 1
 	# the between-matches advert plays as the player leaves the score screen (never at the start of a match)
 	_ad_due = true
 	await get_tree().create_timer(0.9).timeout
@@ -656,6 +695,10 @@ func _on_rack_cleared(info: Dictionary) -> void:
 
 
 func _close_overlays() -> void:
+	_close_confirm()
+	for c in overlay_host.get_children():
+		if c is Overlays.PlayerCard:
+			c.queue_free()
 	for n in [_pause, _results]:
 		if n and is_instance_valid(n):
 			n.queue_free()
@@ -666,13 +709,19 @@ func _close_overlays() -> void:
 
 ## v1.1.15 share popup: on the main menu after the first match, then every 30 minutes (never during a match). The time
 ## it was last shown is kept, so restarting the game doesn't bring it straight back.
+## 24 Nov 2026 (Randy: "the share button to get the xp chest should not appear until someone has played at least 1 match
+## in the day and never on game start"): only once a match has been played today, in this launch of the game - so
+## never when the game starts, whatever happened earlier.
 const SHARE_EVERY := 30 * 60
+var matches_this_launch := 0
 
 
 func share_due() -> bool:
 	if game != null or _stack.is_empty() or _stack.back() != "menu" or Net.update_needed:
 		return false
-	if int(Game.progress.get("matches", 0)) < 1 or overlay_host.get_node_or_null("SharePopup") or overlay_host.get_node_or_null("LanguagePicker"):
+	if matches_this_launch < 1 or str(Game.get_s("last_match_day")) != Game.today():
+		return false
+	if overlay_host.get_node_or_null("SharePopup") or overlay_host.get_node_or_null("LanguagePicker"):
 		return false
 	return Game.now() - int(Game.get_s("share_last")) >= SHARE_EVERY
 
@@ -1709,7 +1758,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -1953,7 +2002,8 @@ func _tour_step(dir: String, s: String) -> void:
 			Net.fake = srv
 			var keep_pr: Dictionary = Game.progress.duplicate(true)
 			var res := []
-			var fill := func(mail: String, pw: String) -> void:
+			var fill := func(mail: String, pw: String, uname := "Pool Shark") -> void:
+				_screen.get("_user").text = uname
 				_screen.get("_email").text = mail
 				_screen.get("_pass").text = pw
 				_screen.call("_submit")
@@ -1975,6 +2025,20 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(0.4)
 			res.append(["... and its button opens the account screen", _screen is AccountScreen])
 			await _shot(dir, "account_create")
+			# 24 Nov 2026: a username, checked on the phone (and by the server)
+			fill.call("randy@example.com", "secret1", "f u. ck")
+			await _wait(0.2)
+			res.append(["a username with a swear word in it is refused ('f u. ck')", said.call() == NameFilter.message("words") and not Net.signed_in()])
+			await _shot(dir, "account_bad_name")
+			fill.call("randy@example.com", "secret1", "Admin")
+			await _wait(0.2)
+			res.append(["'Admin' is refused", said.call() == NameFilter.message("reserved")])
+			fill.call("randy@example.com", "secret1", "ab")
+			await _wait(0.2)
+			res.append(["a 2-letter username is refused", said.call() == NameFilter.message("short")])
+			var rules_box: Control = _screen.find_child("AccountRules", true, false)
+			res.append(["creating an account says it agrees to the Player rules, with the rules one tap away", rules_box != null and rules_box.is_visible_in_tree()
+				and _screen.find_child("AccountRulesLink", true, false) != null])
 			fill.call("randy-at-example", "secret1")
 			await _wait(0.2)
 			res.append(["a bad email is caught on the phone", said.call() == "That doesn't look like an email address."])
@@ -1985,16 +2049,41 @@ func _tour_step(dir: String, s: String) -> void:
 			fill.call("Randy@Example.com", "secret1")
 			await _wait(0.6)
 			res.append(["account created, back on Play Online, signed in", Net.signed_in() and Net.email() == "randy@example.com" and _screen is MenuScreens.OnlineScreen])
+			res.append(["the account has the username (on the phone and the server)", Net.username() == "Pool Shark" and not Net.need_name()
+				and str(srv.accounts["randy@example.com"]["username"]) == "Pool Shark" and bool(srv.accounts["randy@example.com"]["rules"])])
+			res.append(["the player's own name is the username", Game.player_name(0) == "Pool Shark"])
 			res.append(["the phone's player (and its progress) became the account's", str(Game.progress["player"]) == anon and int(srv.players[anon]["xp"]) == 1200])
 			res.append(["the password is not kept on the phone", not var_to_str(Game.progress).contains("secret1")])
 			var pill_r: Rect2 = (_toast_lbl.get_parent() as Control).get_global_rect()
 			res.append(["'Signed in as' shows on a pill above the screen, inside the window", _toast_wrap.modulate.a > 0.5
-				and _toast_lbl.text == "Signed in as randy@example.com" and ui_root.get_child(-1) == _toast_wrap
+				and _toast_lbl.text == "Signed in as Pool Shark" and ui_root.get_child(-1) == _toast_wrap
 				and Rect2(Vector2.ZERO, ui_root.size).encloses(pill_r) and pill_r.size.x < ui_root.size.x * 0.8])
 			await _shot(dir, "account_online_signed_in")
 			go("settings")
 			await _wait(0.4)
+			var urow: Control = _screen.find_child("SettingsUsername", true, false)
+			res.append(["Settings shows the username with Change", urow != null and urow.is_visible_in_tree() and _screen.find_child("SettingsChangeUsername", true, false) != null])
 			await _shot(dir, "account_settings")
+			# change it: a taken one, a blocked one, then a good one
+			srv.accounts["other@example.com"] = {"player": "p999", "pass": "x".sha256_text(), "username": "Cue Master", "flag": false, "rules": true}
+			(_screen.find_child("SettingsChangeUsername", true, false) as Button).pressed.emit()
+			await _wait(0.4)
+			res.append(["Change opens the username screen (username only)", _screen is AccountScreen and int(_screen.get("mode")) == AccountScreen.Mode.NAME
+				and not (_screen.get("_email") as Control).visible])
+			_screen.get("_user").text = "cue_master"
+			_screen.call("_submit")
+			await _wait(0.4)
+			res.append(["a name someone has (written differently) is taken", said.call() == NameFilter.message("taken")])
+			_screen.get("_user").text = "Сука Блять"
+			_screen.call("_submit")
+			await _wait(0.3)
+			res.append(["a Russian swear word is refused", said.call() == NameFilter.message("words")])
+			await _shot(dir, "account_change_name")
+			_screen.get("_user").text = "Shark Two"
+			_screen.call("_submit")
+			await _wait(0.5)
+			res.append(["the new username is saved", Net.username() == "Shark Two" and str(srv.accounts["randy@example.com"]["username"]) == "Shark Two" and not (_screen is AccountScreen)])
+			srv.accounts.erase("other@example.com")
 			# a second phone: nothing on it yet; log in with the account
 			Game.progress = Game.fresh_progress()
 			go("account_login")
@@ -2004,14 +2093,15 @@ func _tour_step(dir: String, s: String) -> void:
 			res.append(["wrong password -> 'Wrong email or password.'", said.call() == "Wrong email or password." and not Net.signed_in()])
 			fill.call("randy@example.com", "secret1")
 			await _wait(0.6)
-			res.append(["second phone logged in: same player, the account's progress (1,200 XP)", Net.signed_in() and str(Game.progress["player"]) == anon and Game.xp() == 1200])
+			res.append(["second phone logged in: same player, the account's progress (1,200 XP) [%s %s %d %s]" % [str(Net.signed_in()), str(Game.progress.get("player", "")) == anon, Game.xp(), str(_screen.get_class() if _screen else "")],
+				Net.signed_in() and str(Game.progress["player"]) == anon and Game.xp() == 1200])
 			# taken email
 			Game.progress = Game.fresh_progress()
 			go("account")
 			await _wait(0.3)
 			fill.call("randy@example.com", "another1")
 			await _wait(0.4)
-			res.append(["signing up with a taken email -> switched to Log in, email kept", bool(_screen.get("_login")) and _screen.get("_email").text == "randy@example.com"
+			res.append(["signing up with a taken email -> switched to Log in, email kept", int(_screen.get("mode")) == AccountScreen.Mode.LOGIN and _screen.get("_email").text == "randy@example.com"
 				and said.call() == "There is already an account with this email. Log in instead."])
 			# sign out
 			fill.call("randy@example.com", "secret1")
@@ -2026,7 +2116,7 @@ func _tour_step(dir: String, s: String) -> void:
 			res.append(["delete needs the password; then the account and its player are gone", not bad.get("ok", false) and gone.get("ok", false) and srv.accounts.is_empty()
 				and not srv.players.has(anon) and not Net.signed_in()])
 			# Play Online: someone is waiting on another version
-			await Net.sign_up("second@example.com", "secret2")
+			await Net.sign_up("second@example.com", "secret2", "Second Shark")
 			var old = load("res://tests/online_ghost.gd").new()
 			old.join(srv, "Old", 40, "1.1.9")
 			_stack.clear()
@@ -2060,7 +2150,7 @@ func _tour_step(dir: String, s: String) -> void:
 			_end_match()
 			Game.progress = Game.fresh_progress()
 			Game.set_s("ar_mode", "studio")
-			await Net.sign_up("standin@example.com", "secret1")
+			await Net.sign_up("standin@example.com", "secret1", "Stand Tester")
 			var ai_before := var_to_str([Game.stats.get("games_vs_ai", []), Game.stats.get("wins_vs_ai", [])])
 			go("online", true)
 			await _wait(0.4)
@@ -2077,7 +2167,7 @@ func _tour_step(dir: String, s: String) -> void:
 				var nm := str(game.player_names[1])
 				var base_name := nm.rstrip("0123456789")
 				res.append(["the opponent has a screen name from the list (%s), level %d" % [nm, int(game.fill_in.get("level", -1))],
-					(nm in FillIn.NAMES or base_name in FillIn.NAMES) and not "CPU" in nm.to_upper()])
+					(nm in FillIn.all_names() or base_name in FillIn.all_names()) and not "CPU" in nm.to_upper()])
 				var hud_title := str(hud.call("_title_text"))
 				res.append(["the match is headed '8-BALL · ONLINE' (%s)" % hud_title, hud_title == "8-BALL · ONLINE"])
 				var cpu_words := []
@@ -2350,8 +2440,17 @@ func _tour_step(dir: String, s: String) -> void:
 			go("menu")
 			await _wait(0.4)
 			res.append(["no match played yet -> no share popup", not share_due()])
-			Game.progress["matches"] = 1
-			res.append(["after the first match, on the main menu -> it's due", share_due()])
+			# 24 Nov 2026: matches on earlier days, or before this launch, don't count - never on game start
+			Game.progress["matches"] = 5
+			Game.set_s("last_match_day", Game.today())
+			matches_this_launch = 0
+			res.append(["a match played today but before this launch (game start) -> no share popup", not share_due()])
+			Game.set_s("last_match_day", "2026-01-01")
+			matches_this_launch = 1
+			res.append(["... nor when the last match was on another day", not share_due()])
+			Game.count_match()
+			matches_this_launch = 1
+			res.append(["after a match today, in this launch, back on the main menu -> it's due", share_due()])
 			open_share()
 			await _wait(0.6)
 			var sp: Control = overlay_host.get_node_or_null("SharePopup")
@@ -2487,6 +2586,103 @@ func _tour_step(dir: String, s: String) -> void:
 			_stack.clear()
 			go("menu")
 			print("INPLACE %s %s" % ["PASS" if ip_bad.is_empty() else "FAIL", str(ip_bad)])
+		"lang_leave":
+			# 24 Nov 2026 texts in every language: the pause menu with Main menu on top, "Leave the match?" (both
+			# texts), the report / block card, the score screen with "Main menu", "Report or block" and the rest of
+			# the rack, the username screen (with its longest message), Settings -> Account with a username and a
+			# blocked player. --langs=de,ta to choose; pictures only for a few languages (--allshots for all).
+			var langs := Loc.codes()
+			var all_shots := OS.get_cmdline_user_args().has("--allshots")
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--langs="):
+					langs = Array(arg.substr(8).split(","))
+			var problems := 0
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			await Net.sign_up("langleave@example.com", "secret1", "Pool Shark")
+			Game.progress["blocked"] = {"p77": "Marco84"}
+			Game.set_s("ar_mode", "studio")
+			for code in langs:
+				Loc.set_language(code)
+				var pic: bool = all_shots or code in ["en", "ta", "ar"]
+				_end_match()
+				_stack.clear()
+				go("menu")
+				start_match({"mode": "versus", "vs_ai": true, "ai_level": 1})
+				await _wait(0.8)
+				pause()
+				await _wait(0.4)
+				problems += _audit_text(code, "pause", _pause)
+				if pic:
+					await _shot(dir, "ll_%s_pause" % code)
+				(_pause.find_child("Pause_quit_match", true, false) as Button).pressed.emit()
+				await _wait(0.4)
+				var cf: Control = overlay_host.find_child("Confirm", false, false)
+				problems += _audit_text(code, "leave_cpu", cf)
+				if pic:
+					await _shot(dir, "ll_%s_leave" % code)
+				cf.queue_free()
+				resume()
+				_end_match()
+				start_match({"mode": "versus", "vs_ai": true, "ai_level": 1, "fill_in": FillIn.make("Pool Shark", 12, 5)})
+				await _wait(0.8)
+				pause()
+				await _wait(0.4)
+				problems += _audit_text(code, "pause_online", _pause)
+				(_pause.find_child("Pause_quit_match", true, false) as Button).pressed.emit()
+				await _wait(0.4)
+				cf = overlay_host.find_child("Confirm", false, false)
+				problems += _audit_text(code, "leave_online", cf)
+				if pic:
+					await _shot(dir, "ll_%s_leave_online" % code)
+				cf.queue_free()
+				player_card()
+				await _wait(0.4)
+				var pc: Control = overlay_host.find_child("PlayerCard", false, false)
+				(pc.find_child("PlayerCardBlock", true, false) as Button).pressed.emit()
+				await _wait(0.2)
+				problems += _audit_text(code, "player_card", pc)
+				if pic:
+					await _shot(dir, "ll_%s_card" % code)
+				pc.queue_free()
+				Game.progress["blocked_names"] = []
+				resume()
+				var xt := XP.Tracker.new()
+				xt.shot(1)
+				xt.won = true
+				xt.match_shots = 5
+				xt.forfeit = true
+				xt.forfeit_balls = 6
+				_results = Overlays.Results.new(self, {"mode": "versus", "winner": 0, "winner_name": "Pool Shark", "reason": "Your opponent left the match",
+					"shots": 5, "vs_ai": false, "online": true, "seat": 0, "opp_name": "Marco84", "xp": xt.summary("online")})
+				overlay_host.add_child(_results)
+				await _wait(3.2)
+				problems += _audit_text(code, "results", _results)
+				if pic:
+					await _shot(dir, "ll_%s_results" % code)
+				_close_overlays()
+				_end_match()
+				go("account_name")
+				await _wait(0.4)
+				_screen.call("_say", NameFilter.message("words"), true)
+				await _wait(0.1)
+				problems += _audit_text(code, "username", _screen)
+				if pic:
+					await _shot(dir, "ll_%s_username" % code)
+				go("settings")
+				await _wait(0.5)
+				problems += _audit_text(code, "settings_account", _screen)
+				if pic:
+					await _shot(dir, "ll_%s_settings" % code)
+			Loc.set_language("en")
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			print("LANGLEAVE %s: %d problems in %d languages" % ["PASS" if problems == 0 else "FAIL", problems, langs.size()])
 		"lang_name":
 			# the new name (Randy, 22 Nov: "Emerald Online 8 Ball Pool AR", "Emerald 8 Ball Pool" under the icon; "make
 			# sure to update the languages too") in every language: the menu's title, the share popup, "Update needed",
@@ -4489,7 +4685,7 @@ func _tour_step(dir: String, s: String) -> void:
 			var keep_pr: Dictionary = Game.progress.duplicate(true)
 			Game.progress = Game.fresh_progress()
 			Game.set_s("ar_mode", "studio")
-			await Net.sign_up("tester@example.com", "secret1")      # v1.1.13: online play is with an account
+			await Net.sign_up("tester@example.com", "secret1", "Online Tester")      # v1.1.13: online play is with an account
 			var on_ok := true
 			var say := func(good: bool, what: String):
 				print("  %s  %s" % ["ok  " if good else "FAIL", what])
@@ -4680,6 +4876,161 @@ func _tour_step(dir: String, s: String) -> void:
 			Game.set_s("ar_mode", "auto")
 			_stack.clear()
 			go("menu")
+		"leave":
+			# 24 Nov 2026 (Randy): "at the settings page, Main Menu should be on top"; "if in a match, a popup
+			# confirmation saying something like they are in a match and they wont get any xp for the match"; the
+			# report / block card (both stores); a stand-in looks like an online player; after the game "Main menu".
+			var lv_bad: Array = []
+			var lchk := func(label: String, good: bool, detail := "") -> void:
+				if not good:
+					lv_bad.append(label)
+				print("  %s  %s  %s" % ["ok  " if good else "FAIL", label, detail])
+			var keep_lv: Dictionary = Game.progress.duplicate(true)
+			var xp0 := Game.xp()
+			Game.set_s("ar_mode", "studio")
+			_end_match()
+			start_match({"mode": "versus", "vs_ai": true, "ai_level": 1})
+			await _wait(1.0)
+			_tour_place_first(game)
+			await _wait(0.5)
+			pause()
+			await _wait(0.5)
+			var first: Button = null
+			for b in _pause.find_children("Pause_*", "Button", true, false):
+				first = b
+				break
+			lchk.call("the pause menu's first button is 'Main menu'", first != null and first.text == "Main menu" and first.name == "Pause_quit_match", first.text if first else "")
+			var below: Button = _pause.find_child("Pause_resume", true, false)
+			lchk.call("... above Resume", first != null and below != null and first.global_position.y < below.global_position.y)
+			await _shot(dir, "leave_pause")
+			first.pressed.emit()
+			await _wait(0.4)
+			var cf: Control = overlay_host.find_child("Confirm", false, false)
+			var cft: Label = cf.find_child("ConfirmText", true, false) if cf else null
+			lchk.call("Main menu in a match against the CPU asks first: no XP for this match", cf != null and cft != null
+				and cft.text == "You're in a match. If you leave now, you won't get any XP for this match." and game != null)
+			await _shot(dir, "leave_confirm_cpu")
+			(cf.find_child("ConfirmNo", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			lchk.call("'Keep playing' -> still in the match, the pause menu still there", game != null and _pause != null and overlay_host.find_child("Confirm", false, false) == null)
+			first.pressed.emit()
+			await _wait(0.3)
+			cf = overlay_host.find_child("Confirm", false, false)
+			(cf.find_child("ConfirmYes", true, false) as Button).pressed.emit()
+			await _wait(0.6)
+			lchk.call("'Leave match' -> the main menu, no XP", game == null and _screen is MenuScreens.MainMenu and Game.xp() == xp0)
+			# a local match (no XP): straight out
+			start_match({"mode": "versus", "vs_ai": false})
+			await _wait(1.0)
+			pause()
+			await _wait(0.4)
+			(_pause.find_child("Pause_quit_match", true, false) as Button).pressed.emit()
+			await _wait(0.5)
+			lchk.call("Local Turn Based (no XP): Main menu leaves at once", game == null and overlay_host.find_child("Confirm", false, false) == null)
+			# a stand-in opponent (Play Online found nobody): looks online, asks with the online words, report / block
+			var fi := FillIn.make("Pool Shark", 12, 31)
+			fi["they_break"] = true
+			start_match({"mode": "versus", "vs_ai": true, "ai_level": int(fi["ai_level"]), "fill_in": fi})
+			await _wait(1.0)
+			# (the first sight of the stand-in's cue builds its shader: seconds on this test machine's software renderer,
+			# done behind the start-of-match cover on a phone. So the turn is measured in game time.)
+			var t0 := Time.get_ticks_msec()
+			var shots_si := []
+			while game.shots_total == 0 and Time.get_ticks_msec() - t0 < 480000:
+				await _wait(0.25)
+				if shots_si.size() < 2 and float(game.get("_si_t")) > [3.0, 7.0][shots_si.size()]:
+					await _shot(dir, "standin_aiming_%d" % (shots_si.size() + 1))
+					shots_si.append(float(game.get("_si_t")))
+			var trk: PackedFloat32Array = game.get("_aim_buf")
+			var moves := 0
+			var pauses := []
+			var still := 0.0
+			for k in range(1, trk.size() / 6):
+				var moved := absf(wrapf(trk[k * 6 + 1] - trk[(k - 1) * 6 + 1], -PI, PI)) > 1e-5 or absf(trk[k * 6 + 5] - trk[(k - 1) * 6 + 5]) > 1e-5
+				if moved:
+					if still > 0.0:
+						pauses.append(still)
+					if k == 1 or still > 0.0:
+						moves += 1
+					still = 0.0
+				else:
+					still += trk[k * 6] - trk[(k - 1) * 6]
+			var turn_s: float = trk[trk.size() - 6] if not trk.is_empty() else 0.0
+			lchk.call("the stand-in's break: aimed through the online playback, at a person's pace", not trk.is_empty() and game.shots_total == 1
+				and turn_s > 2.5 and moves >= 3, "%.1f s of game time, %d separate movements, pauses %s" % [turn_s, moves, str(pauses.map(func(x): return snappedf(x, 0.1)))])
+			var cpu_words := []
+			for n in get_tree().root.find_children("*", "Label", true, false):
+				var lb := n as Label
+				if lb.is_visible_in_tree() and ("CPU" in lb.text or "KI" == lb.text):
+					cpu_words.append(lb.text)
+			lchk.call("nothing on screen calls it the CPU", cpu_words.is_empty(), str(cpu_words))
+			while game.state != PoolGame.State.AIM and game.state != PoolGame.State.BALL_IN_HAND and Time.get_ticks_msec() - t0 < 60000:
+				await _wait(0.3)
+			pause()
+			await _wait(0.4)
+			lchk.call("the pause menu offers 'Report or block player', not Restart", _pause.find_child("Pause_player_card", true, false) != null and _pause.find_child("Pause_restart", true, false) == null)
+			(_pause.find_child("Pause_quit_match", true, false) as Button).pressed.emit()
+			await _wait(0.4)
+			cf = overlay_host.find_child("Confirm", false, false)
+			cft = cf.find_child("ConfirmText", true, false) if cf else null
+			lchk.call("leaving says the opponent gets the win (as online)", cft != null and cft.text.ends_with("and your opponent gets the win."))
+			await _shot(dir, "leave_confirm_online")
+			(cf.find_child("ConfirmNo", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			(_pause.find_child("Pause_player_card", true, false) as Button).pressed.emit()
+			await _wait(0.4)
+			var pc: Control = overlay_host.find_child("PlayerCard", false, false)
+			lchk.call("Report or block -> the player's card with their name", pc != null and (pc.find_child("PlayerCardName", true, false) as Label).text == str(game.player_names[1]))
+			await _shot(dir, "player_card")
+			(pc.find_child("Report_name", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			lchk.call("report -> 'Thanks for the report'", (pc.find_child("PlayerCardNote", true, false) as Label).text == L.t("Thanks for the report. We'll look into it."))
+			(pc.find_child("PlayerCardBlock", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			var bnm := str(game.player_names[1])
+			lchk.call("block -> that name is never used for a stand-in again", bnm in Game.progress.get("blocked_names", [])
+				and (pc.find_child("PlayerCardBlock", true, false) as Button).text == "Unblock player")
+			await _shot(dir, "player_card_blocked")
+			var never := true
+			for i in 300:
+				if FillIn.make("Pool Shark", 12, i)["name"] == bnm:
+					never = false
+			lchk.call("... (300 new stand-ins, none called %s)" % bnm, never)
+			pc.queue_free()
+			resume()
+			# the score screen: Main menu, and Report or block
+			game.rules.winner = 0
+			game.call("_finish", 0, "Your opponent left the match")
+			await _wait(1.4)
+			lchk.call("the score screen has 'Main menu' and 'Report or block'", _results != null and _results.find_child("ResultsMainMenu", true, false) != null
+				and (_results.find_child("ResultsMainMenu", true, false) as Button).text == "Main menu" and _results.find_child("ResultsReport", true, false) != null)
+			await _shot(dir, "results_main_menu")
+			_close_overlays()
+			_end_match()
+			# a win because the other player left, as the score screen shows it
+			start_match({"mode": "versus", "vs_ai": true, "ai_level": 1, "fill_in": FillIn.make("Pool Shark", 12, 3)})
+			await _wait(0.8)
+			var xt := XP.Tracker.new()
+			xt.shot(1)
+			xt.shot(1)
+			xt.turn_over()
+			xt.won = true
+			xt.match_shots = 7
+			xt.forfeit = true
+			xt.forfeit_balls = 5
+			var fres := {"mode": "versus", "winner": 0, "winner_name": "Pool Shark", "reason": "Your opponent left the match", "shots": 7, "vs_ai": false,
+				"online": true, "seat": 0, "opp_name": "Marco84", "xp": xt.summary("online"), "gain": {"from": 12, "to": 13, "xp_from": XP.total_for(12) + 40, "xp_to": XP.total_for(12) + 40 + int(xt.summary("online")["total"])}}
+			_results = Overlays.Results.new(self, fres)
+			overlay_host.add_child(_results)
+			await _wait(4.5)
+			lchk.call("the opponent left: the rest of the rack and the win bonus are paid", int(fres["xp"]["forfeit_xp"]) == 25 * 5 + 55 and int(fres["xp"]["total"]) > 300, str(fres["xp"]["total"]))
+			await _shot(dir, "results_forfeit")
+			_close_overlays()
+			_end_match()
+			Game.progress = keep_lv
+			Game.request_save()
+			go("menu", true)
+			print("LEAVE %s %s" % ["PASS" if lv_bad.is_empty() else "FAIL", str(lv_bad)])
 		"pausemenu":
 			# the pause menu's view / table / scene card: everything switches in the middle of a match
 			var pm_bad: Array = []

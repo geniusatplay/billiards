@@ -22,6 +22,11 @@ var ai_level := 1
 ## v1.1.15: Play Online found nobody within a minute: the AI plays under a screen name (FillIn.make), and the
 ## match looks, plays and pays like an online one. Empty for every other match.
 var fill_in := {}
+var _si_rng := RandomNumberGenerator.new()
+var _si_t := 0.0             # seconds into the stand-in's turn
+var _si_place: Array = []    # [[seconds, position]] the cue ball is dragged through (ball in hand)
+var _si_place_i := 0
+var _si_aim_from := -1.0
 ## v1.1.15: the tutorial runs as a practice match (src/game/tutorial.gd arranges the table between objectives):
 ## no rack-cleared screen, no stats; the aim guide it asks for; the last stroke for its checks.
 var tutorial := false
@@ -142,6 +147,12 @@ func looks_online() -> bool:
 	return online or not fill_in.is_empty()
 
 
+## The other player, for the report / block card: [name, player id] ("" id for a stand-in).
+func opponent() -> Array:
+	var seat := 1 - local_seat()
+	return [player_names[seat], net.opp_id if online and net else ""]
+
+
 func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	stage = p_stage
 	control_layer = p_layer
@@ -149,6 +160,7 @@ func setup(p_stage: Stage, p_layer: Control, cfg: Dictionary) -> void:
 	vs_ai = cfg.get("vs_ai", false)
 	online = cfg.get("online", false)
 	fill_in = cfg.get("fill_in", {}) if vs_ai else {}
+	_si_rng.randomize()
 	tutorial = cfg.has("tutorial")
 	warmup = cfg.get("warmup", false)
 	net = cfg.get("net") as NetMatch
@@ -513,8 +525,8 @@ func _process(delta: float) -> void:
 					_tick_clock(delta)      # the other player is thinking: their clock runs here too
 				_update_remote(delta)
 			else:
-				if not fill_in.is_empty() and (_ai_result.is_empty() or _ai_think > 0.0):
-					_tick_clock(delta)      # a stand-in opponent's clock runs while it thinks, as a person's does
+				if not fill_in.is_empty():
+					_tick_clock(delta)      # a stand-in opponent's clock runs all through its turn, as a person's does
 				_update_ai(delta)
 		State.ROLLING:
 			_rolling_time += delta
@@ -937,7 +949,8 @@ func _resolve_versus() -> void:
 	_start_turn()
 
 
-func _finish(winner: int, reason: String) -> void:
+## `forfeit`: the other player left - this player wins and is paid as if they had cleared the rest of the rack.
+func _finish(winner: int, reason: String, forfeit := false) -> void:
 	_set_state(State.OVER)
 	var human_won := not vs_ai or winner == 0
 	if vs_ai and fill_in.is_empty():
@@ -945,10 +958,15 @@ func _finish(winner: int, reason: String) -> void:
 	Sfx.play("win" if human_won else "lose", 0.9)
 	Game.vibrate(60)
 	var info := {"mode": "versus", "winner": winner, "winner_name": player_names[winner],
-		"reason": reason, "shots": shots_total, "vs_ai": vs_ai and fill_in.is_empty(), "ai_level": ai_level, "online": looks_online(), "seat": local_seat()}
+		"reason": reason, "shots": shots_total, "vs_ai": vs_ai and fill_in.is_empty(), "ai_level": ai_level, "online": looks_online(), "seat": local_seat(),
+		"opp_name": player_names[1 - local_seat()]}
 	if xp_track:
 		xp_track.won = winner == local_seat()
 		xp_track.match_shots = shots_total
+		if forfeit and xp_track.won:
+			var g: int = rules.groups[local_seat()]
+			xp_track.forfeit = true
+			xp_track.forfeit_balls = rules.remaining_of(sim, g) if g >= 0 else 7
 		info["xp"] = xp_track.summary(xp_mode())
 	if online and net:
 		print("[net] match over (%s): %d requests on %d connections; %d snapshots put replays right; %d repeated events left out; XP %s" % [
@@ -1136,7 +1154,7 @@ func _net_tick(_delta: float) -> void:
 				var reason := "Your opponent left the match" if w == net_seat else "The connection was lost"
 				if why == "time":
 					reason = L.t("%s ran out of time") % player_names[1 - w]
-				_finish(w, reason)
+				_finish(w, reason, w == net_seat and why != "time")
 			"aim":
 				# how their cue moved (only for the turn being played: older batches are dropped)
 				if not plays_here(current) and int(d.get("turn", shots_total)) == shots_total:
@@ -1182,7 +1200,7 @@ func _net_tick(_delta: float) -> void:
 		# server is told too, so that phone - should it come back - shows the match as lost, not as a second win.
 		rules.winner = net_seat
 		net.send("over", {"winner": net_seat, "why": "away"})
-		_finish(net_seat, "Your opponent left the match")
+		_finish(net_seat, "Your opponent left the match", true)
 	elif net.silent > 45.0:
 		rules.winner = 1 - net_seat
 		_finish(1 - net_seat, "The connection was lost")
@@ -1359,8 +1377,31 @@ func _start_ai(ball_in_hand: bool) -> void:
 	var legal := rules.legal_targets(sim, current)
 	var eight_ok := legal == [8]
 	var ai := AIPlayer.new(ai_level)
+	var c := cue_index()
+	var from_p := cue_ball_pos()
 	if ball_in_hand:
 		_respawn_cue(ai.choose_placement(sim.clone(), own))
+	elif not fill_in.is_empty() and rules.is_break and _break_pending and _si_rng.randf() < 0.55:
+		# a person often moves the cue ball along behind the line before breaking
+		var want := Vector2(Rack.kitchen_limit(sim) - _si_rng.randf_range(0.0, 0.3),
+			_si_rng.randf_range(-0.65, 0.65) * (sim.table.b - sim.R))
+		var spot: Variant = _legal_cue_spot(want)
+		if spot != null:
+			sim.pos[c] = spot
+	if not fill_in.is_empty():
+		# the stand-in plays its turn the way an online opponent's turn is shown (FillIn.aim_track)
+		_si_t = 0.0
+		_si_place = []
+		_si_place_i = 0
+		_si_aim_from = -1.0
+		_aim_buf = PackedFloat32Array()
+		var to := cue_ball_pos()
+		if to.distance_to(from_p) > sim.R * 0.25 and _standin_budget() >= 4.0:
+			views[c].place(from_p)
+			for wp in FillIn.place_path(_si_rng, from_p, to):
+				var q: Variant = _legal_cue_spot(wp[1])
+				_si_place.append([wp[0], q if q != null else to])
+			_si_place[-1][1] = to
 	var snapshot := sim.clone()
 	snapshot.record_events = false
 	var is_break := rules.is_break
@@ -1368,7 +1409,88 @@ func _start_ai(ball_in_hand: bool) -> void:
 	_ai_thread.start(func(): return ai.choose(snapshot, legal, own, eight_ok, is_break))
 
 
+## A stand-in's turn (Play Online found nobody): the cue ball dragged to its place when it has ball in hand, then
+## the stick moved by FillIn.aim_track through the same playback as a real online opponent's (_aim_at), then the stroke.
+func _update_standin(delta: float) -> void:
+	_si_t += delta
+	var c := cue_index()
+	while _si_place_i < _si_place.size() and float(_si_place[_si_place_i][0]) <= _si_t:
+		views[c].glide_to(_si_place[_si_place_i][1], 0.1)
+		if _si_place_i == _si_place.size() - 1:
+			Sfx.play("tick", 0.25)
+		_si_place_i += 1
+	var placing := _si_place_i < _si_place.size()
+	cue_view.visible = not placing
+	if _ai_result.is_empty():
+		if _ai_thread and not _ai_thread.is_alive():
+			_ai_result = _ai_thread.wait_to_finish()
+			_ai_thread = null
+		if not placing:
+			cue_view.aim(cue_ball_pos(), control.yaw, min_elevation(control.yaw, Vector2.ZERO), Vector2.ZERO, 0.0)
+		return
+	if _aim_buf.is_empty():
+		var place_end: float = float(_si_place[-1][0]) if not _si_place.is_empty() else 0.0
+		var start := maxf(_si_t, place_end + _si_rng.randf_range(0.3, 0.9))
+		_aim_buf = FillIn.aim_track(_si_rng, control.yaw, float(_ai_result["yaw"]), float(_ai_result["elev"]),
+			_ai_result["offset"], float(_ai_result["power"]), rules.is_break, ai_level, start,
+			_shot_trickiness(float(_ai_result["yaw"]), _ai_result["offset"], float(_ai_result["elev"])), _standin_budget() - start)
+		_si_aim_from = start
+	if placing or _si_t < _si_aim_from:
+		if not placing:
+			cue_view.aim(cue_ball_pos(), control.yaw, min_elevation(control.yaw, Vector2.ZERO), Vector2.ZERO, 0.0)
+		return
+	var a := _aim_at(_si_t)
+	control.yaw = a[0]
+	var off := Vector2(a[2], a[3])
+	cue_view.aim(cue_ball_pos(), a[0], maxf(a[1], min_elevation(a[0], off)), off, a[4])
+	if _si_t >= float(_aim_buf[_aim_buf.size() - 6]):
+		fire(float(_ai_result["yaw"]), float(_ai_result["power"]), _ai_result["offset"], float(_ai_result["elev"]))
+
+
+## How long the stand-in may take over this turn: its clock shared out over the shots it may still need, with a
+## minute kept back - so however the match goes, it never runs out of time.
+func _standin_budget() -> float:
+	if clocks[current] < 90.0:
+		return clampf(clocks[current] / 18.0, 0.8, 3.0)      # (short of time: brisk, like a person in a hurry)
+	var left: float = clocks[current] - 60.0
+	var own_left := 7
+	if rules.groups[current] >= 0:
+		own_left = rules.remaining_of(sim, rules.groups[current])
+	var shots_left := 3.0 + 2.2 * float(own_left + 1)
+	return clampf(left / shots_left, 2.5, 30.0)
+
+
+## 0 (easy) .. 1 (tricky): a long shot, a thin cut, a ball in the way or nothing hit straight (a bank or a safety),
+## spin, the stick raised.
+func _shot_trickiness(yaw: float, offset: Vector2, elev: float) -> float:
+	var c := cue_index()
+	var o := sim.pos[c]
+	var d := Vector2(cos(yaw), sin(yaw))
+	var best := INF
+	var b_perp := 0.0
+	for i in sim.n:
+		if i == c or sim.st[i] == PoolSim.ST_POCKETED:
+			continue
+		var rel: Vector2 = sim.pos[i] - o
+		var along := rel.dot(d)
+		var perp := absf(rel.cross(d))
+		if along > 0.0 and perp < 2.0 * sim.R and along < best:
+			best = along
+			b_perp = perp
+	var k := 0.0
+	if best == INF:
+		k += 0.55                                                     # no ball straight on: a bank, a kick or a safety
+	else:
+		k += 0.35 * clampf(best / (2.0 * sim.table.a), 0.0, 1.0)      # long
+		k += 0.45 * clampf(b_perp / (2.0 * sim.R), 0.0, 1.0)          # thin cut
+	k += 0.15 * clampf(offset.length() / 0.5, 0.0, 1.0) + (0.2 if elev > 0.05 else 0.0)
+	return clampf(k, 0.0, 1.0)
+
+
 func _update_ai(delta: float) -> void:
+	if not fill_in.is_empty() and not online:
+		_update_standin(delta)
+		return
 	if _ai_result.is_empty():
 		if _ai_thread and not _ai_thread.is_alive():
 			_ai_result = _ai_thread.wait_to_finish()

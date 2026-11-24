@@ -315,10 +315,68 @@ func email() -> String:
 	return str(Game.progress.get("email", ""))
 
 
+## 24 Nov 2026: the account's username - the name other players see. "" until it is chosen.
+func username() -> String:
+	return str(Game.progress.get("username", ""))
+
+
+## The account has no username yet (made before usernames), or a moderator took it away: the game asks for one.
+func need_name() -> bool:
+	return signed_in() and (username() == "" or Game.progress.get("need_name", false) == true)
+
+
+signal name_needed
+
+## Gives the account a new username. Returns the server's reply ({ok} or {error: bad_name + why / name_taken}).
+func set_username(name: String, rules := false) -> Dictionary:
+	var body := creds()
+	body["username"] = NameFilter.tidy(name)
+	if rules:
+		body["rules"] = true
+	var r: Dictionary = await api("set_name", body)
+	if r.get("ok", false):
+		Game.progress["username"] = str(r.get("username", body["username"]))
+		Game.progress["need_name"] = false
+		Game.settings["p1_name"] = Game.DEFAULT_NAMES[0]
+		Game.progress_changed.emit()
+		Game.request_save()
+	return r
+
+
+## Report the other player (target = their player id; reason "name", "cheating" or "other").
+func report_player(target: String, reason: String) -> Dictionary:
+	var body := creds()
+	body["target"] = target
+	body["reason"] = reason
+	return await api("report", body)
+
+
+## Never be matched with that player again (either way). Keeps the list on this phone too.
+func block_player(target: String, name: String, on := true) -> Dictionary:
+	var body := creds()
+	body["target"] = target
+	var r: Dictionary = await api("block" if on else "unblock", body)
+	var local: Dictionary = Game.progress.get("blocked", {})
+	if on:
+		local[target] = name
+	else:
+		local.erase(target)
+	Game.progress["blocked"] = local
+	Game.request_save()
+	return r
+
+
+func is_blocked(target: String) -> bool:
+	return (Game.progress.get("blocked", {}) as Dictionary).has(target)
+
+
 ## Creates an account. If this phone has been playing already (it has a player id), that player - and its
 ## progress - becomes the account's. Returns the server's reply ({ok, error}).
-func sign_up(mail: String, password: String) -> Dictionary:
+func sign_up(mail: String, password: String, uname := "") -> Dictionary:
 	var body := {"email": mail.strip_edges(), "password": password, "name": Game.player_name(0)}
+	if uname != "":
+		body["username"] = NameFilter.tidy(uname)
+		body["rules"] = true          # (the screen says that creating the account agrees to the player rules)
 	if registered():
 		body.merge(creds())
 	var r: Dictionary = await api("signup", body)
@@ -335,7 +393,7 @@ func log_in(mail: String, password: String) -> Dictionary:
 	if r.get("ok", false):
 		_use_account(r)
 		var n := str(r.get("name", ""))
-		if n != "" and not n in Game.DEFAULT_NAMES and str(Game.get_s("p1_name")) in Game.DEFAULT_NAMES:
+		if username() == "" and n != "" and not n in Game.DEFAULT_NAMES and str(Game.get_s("p1_name")) in Game.DEFAULT_NAMES:
 			Game.store_player_name(0, n)
 		await pull_progress()
 		push_progress()
@@ -364,6 +422,10 @@ func _use_account(r: Dictionary) -> void:
 	Game.progress["player"] = str(r["id"])
 	Game.progress["token"] = str(r["token"])
 	Game.progress["email"] = str(r.get("email", ""))
+	Game.progress["username"] = str(r.get("username", ""))
+	Game.progress["need_name"] = r.get("need_name", false) == true
+	if username() != "":
+		Game.settings["p1_name"] = Game.DEFAULT_NAMES[0]     # (the username is the player's name from now on)
 	Game.request_save()
 
 
@@ -378,6 +440,10 @@ func _forget_account() -> void:
 ## The words for a reply's error, for the account screens.
 static func account_error(r: Dictionary) -> String:
 	match str(r.get("error", "")):
+		"bad_name": return NameFilter.message(str(r.get("why", "words")))
+		"name_taken": return NameFilter.message("taken")
+		"need_name": return "Choose a username to play online."
+		"too_fast": return "Please wait a moment and try again."
 		"bad_email": return "That doesn't look like an email address."
 		"short_password": return "The password needs at least 6 characters."
 		"email_taken": return "There is already an account with this email. Log in instead."
@@ -411,7 +477,7 @@ func push_progress() -> void:
 	_saving = true
 	if await ensure_player():
 		var body := creds()
-		body["name"] = Game.player_name(0)
+		body["name"] = username() if username() != "" else Game.player_name(0)
 		body["progress"] = {}
 		for k in SYNCED:
 			body["progress"][k] = Game.progress.get(k)
@@ -424,9 +490,16 @@ func pull_progress() -> void:
 	var r: Dictionary = await api("load", creds())
 	if not r.get("ok", false) or typeof(r.get("progress")) != TYPE_DICTIONARY:
 		return
+	if signed_in():
+		# the account's username as the server has it (a moderator may have taken it away: then choose a new one)
+		Game.progress["username"] = str(r.get("username", ""))
+		Game.progress["need_name"] = r.get("need_name", false) == true
+		Game.request_save()
+		if need_name():
+			name_needed.emit()
 	var p: Dictionary = r["progress"]
 	# v1.1.15: what pays once per player is kept whichever copy is ahead (the tutorial's chest, today's share chest)
-	if bool(p.get("tutorial", false)) and not Game.tutorial_done():
+	if p.get("tutorial", false) == true and not Game.tutorial_done():      # (null in a copy that never had it)
 		Game.progress["tutorial"] = true
 		Game.request_save()
 	if str(p.get("share_day", "")) > str(Game.progress.get("share_day", "")):

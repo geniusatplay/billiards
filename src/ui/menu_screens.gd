@@ -478,6 +478,11 @@ class MatchSetup extends Screen:
 		_name2.max_length = 14
 		if not vs_ai:
 			cv.add_child(_name2)
+		_name_msg = UIKit.label("", "SmallLabel")
+		_name_msg.name = "NameMessage"
+		_name_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_name_msg.add_theme_color_override("font_color", UIKit.CORAL)
+		cv.add_child(_name_msg)
 		body.add_child(card)
 		var rules := UIKit.label(L.t("8-ball. Each player has a %d:00 time bank for the whole match — it only runs while you aim. A chime, a vibration and a banner tell you when it's your turn.") % int(Game.get_s("time_bank_minutes")), "MutedLabel")
 		rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -488,10 +493,23 @@ class MatchSetup extends Screen:
 		cc.add_child(start)
 		body.add_child(cc)
 
+	var _name_msg: Label
+
 	func _start() -> void:
 		if Game.world_ready == "":
 			router.call("place_world_again")
 			return
+		# the same name check as usernames (24 Nov 2026), for the names typed here too
+		for e in ([_name1] if vs_ai else [_name1, _name2]):
+			var typed := NameFilter.tidy((e as LineEdit).text)
+			if typed == "" or typed == Game.player_name(0) or typed == Game.player_name(1):
+				continue
+			var why := NameFilter.check(typed)
+			if why != "":
+				_name_msg.text = NameFilter.message(why)
+				Sfx.ui("back")
+				(e as LineEdit).grab_focus()
+				return
 		Game.store_player_name(0, _name1.text)
 		Game.store_player_name(1, _name2.text)
 		Game.set_s("ai_level", _ai_level)
@@ -614,6 +632,8 @@ class OnlineScreen extends Screen:
 		_find.pressed.connect(func():
 			if not Net.signed_in():
 				router.call("go", "account")     # v1.1.13: online play is with an account
+			elif Net.need_name() and not _searching:
+				router.call("go", "account_name")   # (24 Nov 2026: and a username)
 			elif _searching:
 				_cancel()
 			elif Game.world_ready == "":
@@ -658,15 +678,22 @@ class OnlineScreen extends Screen:
 		if ping >= 9999:
 			return _failed()
 		_t0 = Time.get_ticks_msec()
+		# within the minute, but not always on the dot (a stand-in found at exactly 60 s every time would give it away)
+		var give_up := search_seconds * randf_range(0.7, 1.0)
 		while _searching and is_inside_tree():
 			var body_d := Net.creds()
 			body_d["ping"] = ping
 			body_d["ver"] = Net.ONLINE_VERSION
 			# the other phone shows this player's cue, and uses this player's table (if they break) or balls
-			body_d["info"] = {"name": Game.player_name(0), "level": Game.level(), "cue": str(Game.get_s("cue_skin")),
+			body_d["info"] = {"name": Net.username(), "level": Game.level(), "cue": str(Game.get_s("cue_skin")),
 				"table": str(Game.get_s("table_style")), "balls": str(Game.get_s("ball_set"))}
 			var r: Dictionary = await Net.api("queue", body_d)
 			if not is_inside_tree() or not _searching:
+				return
+			if str(r.get("error", "")) == "need_name":
+				_cancel()
+				Game.progress["need_name"] = true
+				router.call("go", "account_name")       # (a moderator took the username away)
 				return
 			if not r.get("ok", false):
 				return _failed()
@@ -678,7 +705,7 @@ class OnlineScreen extends Screen:
 				router.call("start_match", {"mode": "versus", "online": true, "net": m})
 				return
 			var waited := (Time.get_ticks_msec() - _t0) / 1000.0
-			if waited >= search_seconds:
+			if waited >= give_up:
 				return _stand_in()
 			var line := L.t("Looking for an opponent… %d s") % int(waited)
 			if int(r.get("other_ver", 0)) > 0:
@@ -692,7 +719,7 @@ class OnlineScreen extends Screen:
 	func _stand_in() -> void:
 		_searching = false
 		Net.api("leave", Net.creds(), "poll")
-		var f := FillIn.make(Game.player_name(0), Game.level())
+		var f := FillIn.make(Net.username(), Game.level())
 		Sfx.play("turn_chime", 0.9)
 		router.call("start_match", {"mode": "versus", "vs_ai": true, "ai_level": int(f["ai_level"]), "fill_in": f})
 
