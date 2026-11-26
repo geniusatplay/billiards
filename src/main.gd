@@ -30,20 +30,25 @@ var _tour_dir := ""          # (the automated tour opens the share popup itself)
 ## account ... they should still be prompted to create a name though"): at the start, a phone that isn't signed in
 ## signs in with its Google Play Games / Game Center account by itself; a new account then asks for its username.
 ## No game account (or the player said no, or signed out on purpose): the account screen, as before.
+## 26 Nov 2026 (Randy, 13:50 again: "just auto sign in to the google play or apple account linked to the device
+## similar to how among us does it ... people should be prompted to choose a username though which they can change
+## at settings"): the phone's Google Play Games / Game Center account signs the player in by itself, then a new
+## account chooses its username. No sign-in screen at launch: when the phone has no game account (or the player
+## says no), the menu stays as it is and Play Online's button signs in with the phone's account.
 func _auto_sign_in() -> void:
-	if Game.settings.get("auto_sign_in", true) == true:
-		await Net.fetch_providers()
-		if Net.platform_ready():
-			var r: Dictionary = await Net.platform_sign_in(true)
-			if r.get("ok", false):
-				if Net.need_name():
-					if game == null:
-						go("account_name")
-				else:
-					toast(L.t("Signed in as %s") % Net.username())
-				return
-	if not Net.signed_in() and game == null and not (_screen is AccountScreen):
-		go("account")
+	if Game.settings.get("auto_sign_in", true) != true:
+		return
+	await Net.fetch_providers()
+	if not Net.platform_ready():
+		return
+	var r: Dictionary = await Net.platform_sign_in(true)
+	if not r.get("ok", false):
+		return
+	if Net.need_name():
+		if game == null:
+			go("account_name")
+	else:
+		toast(L.t("Signed in as %s") % Net.username())
 
 
 func _ready() -> void:
@@ -894,6 +899,34 @@ func cbtn_text_on(root: Node, text: String) -> bool:
 		if (l as Label).is_visible_in_tree() and (l as Label).text == text:
 			return true
 	return false
+
+
+## (tour, 26 Nov 2026) The two Place world cards fit inside the screen, under the title: as first seen, and with
+## "Now: …" on the chosen card (the Place world button before a match). Returns the number of problems.
+func _place_world_fits(tag: String) -> int:
+	var bad := 0
+	var keep: String = Game.world_ready
+	for wr in ["", "studio"]:
+		Game.world_ready = wr
+		_stack.clear()
+		go("place_world")
+		await _wait(0.5)
+		var pw := _screen as WorldScreens.PlaceWorldScreen
+		if pw == null:
+			bad += 1
+			print("  PLACE WORLD [%s] the screen did not open" % tag)
+			continue
+		var cr: Rect2 = pw.cards_rect()
+		var rr: Rect2 = pw.room_rect()
+		var vp := get_viewport().get_visible_rect()
+		var inside := cr.size.y > 0.0 and cr.position.y >= rr.position.y - 1.0 and cr.end.y <= minf(rr.end.y, vp.end.y) + 1.0 \
+			and cr.position.x >= vp.position.x - 1.0 and cr.end.x <= vp.end.x + 1.0
+		print("  place world [%s%s] cards y %d-%d, room %d-%d, screen %dx%d%s" % [tag, " now" if wr != "" else "", cr.position.y,
+			cr.end.y, rr.position.y, rr.end.y, vp.size.x, vp.size.y, "" if inside else "  OFF SCREEN"])
+		if not inside:
+			bad += 1
+	Game.world_ready = keep
+	return bad
 
 
 func _audit_text(code: String, where: String, root: Node = null) -> int:
@@ -3331,10 +3364,14 @@ func _tour_step(dir: String, s: String) -> void:
 			go("menu")
 			await _auto_sign_in()
 			await _wait(0.8)
+			chk.call("signed out on purpose -> next start: no automatic sign-in, and no sign-in screen (the menu stays)",
+				sp.count("platformSignIn") == n_before and _screen is MenuScreens.MainMenu and not Net.signed_in(), "")
+			go("account")         # (Settings -> Account)
+			await _wait(0.8)
 			sc = _screen
 			var pb: Button = sc.find_child("Social_platform", true, false) if sc else null
-			chk.call("signed out on purpose -> next start: no automatic sign-in, the account screen with 'Continue with Google Play Games' first",
-				sp.count("platformSignIn") == n_before and sc is AccountScreen and pb != null and pb.text == L.t("Continue with %s") % "Google Play Games"
+			chk.call("... the account screen has 'Continue with Google Play Games' first",
+				sc is AccountScreen and pb != null and pb.text == L.t("Continue with %s") % "Google Play Games"
 				and pb.get_index() == 0, pb.text if pb else "-")
 			chk.call("... Facebook not offered (scrapped for now) though the server has it on", sc.find_child("Social_facebook", true, false) == null
 				and srv.providers.get("facebook", false) == true, "")
@@ -3344,7 +3381,8 @@ func _tour_step(dir: String, s: String) -> void:
 			await _wait(1.2)
 			chk.call("... the button -> the same account (no name asked again), back with 'Signed in as KaiPool'",
 				Net.signed_in() and Net.username() == "KaiPool" and not (_screen is AccountScreen) and Game.settings.get("auto_sign_in") == true, Net.username())
-			# --- no game account on the phone (or the player said no): the account screen, as before
+			# --- no game account on the phone (or the player said no): no sign-in screen at the start (Randy, 26 Nov 13:50:
+			# "just auto sign in ... similar to how among us does it"); Play Online's button asks the phone's account again
 			Net.log_out()
 			Game.set_s("auto_sign_in", true)
 			for ans in ["none", "cancel"]:
@@ -3353,7 +3391,38 @@ func _tour_step(dir: String, s: String) -> void:
 				go("menu")
 				await _auto_sign_in()
 				await _wait(0.6)
-				chk.call("no Play Games player ('%s') -> the account screen" % ans, _screen is AccountScreen and not Net.signed_in(), "")
+				chk.call("no Play Games player ('%s') at the start -> no sign-in screen, the menu stays" % ans, _screen is MenuScreens.MainMenu and not Net.signed_in(), "")
+			sp.platform_answer = "cancel"
+			go("online")
+			await _wait(0.6)
+			var fb: Button = _screen.find_child("FindMatch", true, false) if _screen else null
+			if fb == null:
+				for b in _screen.find_children("*", "Button", true, false):
+					if (b as Button).text == L.t("Continue with %s") % "Google Play Games":
+						fb = b
+			chk.call("Play Online, not signed in -> its button is 'Continue with Google Play Games'", fb != null and fb.text == L.t("Continue with %s") % "Google Play Games", fb.text if fb else "-")
+			await _shot(dir, "autosign_4_online")
+			var n3: int = sp.count("platformSignIn")
+			fb.pressed.emit()
+			await _wait(1.0)
+			chk.call("... said no on the phone's screen -> still on Play Online, the button still there", sp.count("platformSignIn") == n3 + 1
+				and _screen is MenuScreens.OnlineScreen and not Net.signed_in(), "")
+			sp.platform_answer = "pg:pgc-501\nKai Lee"
+			fb = null
+			for b in _screen.find_children("*", "Button", true, false):
+				if (b as Button).text == L.t("Continue with %s") % "Google Play Games":
+					fb = b
+			if fb:
+				fb.pressed.emit()
+			await _wait(1.2)
+			var fb2: Button = null
+			for b in _screen.find_children("*", "Button", true, false):
+				if (b as Button).text == L.t("Find a match"):
+					fb2 = b
+			chk.call("... yes this time -> signed in as KaiPool (no name asked again), Play Online with 'Find a match'", Net.signed_in() and Net.username() == "KaiPool"
+				and _screen is MenuScreens.OnlineScreen and fb2 != null, Net.username())
+			Net.log_out()
+			Game.set_s("auto_sign_in", true)
 			# --- iPhone: Game Center
 			Net.as_ios = true
 			sp.as_android = false
@@ -3382,7 +3451,22 @@ func _tour_step(dir: String, s: String) -> void:
 			go("menu")
 			await _auto_sign_in()
 			await _wait(0.6)
-			chk.call("platform off on the server -> not asked, the account screen", sp.count("platformSignIn") == n2 and _screen is AccountScreen, "")
+			chk.call("platform off on the server -> not asked, no sign-in screen", sp.count("platformSignIn") == n2 and _screen is MenuScreens.MainMenu, "")
+			go("online")
+			await _wait(0.6)
+			var fb3: Button = null
+			var seen := []
+			for b in _screen.find_children("*", "Button", true, false):
+				seen.append((b as Button).text)
+				if (b as Button).text == L.t("Create account or log in"):
+					fb3 = b
+			if fb3 == null:
+				print("  (Play Online buttons: %s on %s)" % [str(seen), _screen.get_class() if _screen else "-"])
+			var had_fb3 := fb3 != null
+			if fb3:
+				fb3.pressed.emit()     # (the button is freed with its screen)
+				await _wait(0.6)
+			chk.call("... Play Online then offers 'Create account or log in' -> the account screen", had_fb3 and _screen is AccountScreen, str(_stack))
 			Net.as_ios = false
 			Net.platform_plugin = null
 			Net.signin_plugin = null
@@ -3836,6 +3920,7 @@ func _tour_step(dir: String, s: String) -> void:
 			var scl: Label = _screen.find_child("WorldSceneName", true, false)
 			ipc.call("the Place world card names the scene from Choose Gear", scl != null and scl.text == str(Game.scene_style()["name"]), scl.text if scl else "")
 			await _shot(dir, "inplace_card")
+			ipc.call("the Place world cards fit on the screen (also with 'Now: …')", (await _place_world_fits("en")) == 0)
 			Game.set_s("scene", keep_sc)
 			Game.set_s("ar_background", keep_bg)
 			_stack.clear()
@@ -4952,6 +5037,10 @@ func _tour_step(dir: String, s: String) -> void:
 					go(scr)
 					await _wait(0.5)
 					problems += _audit_text(code, scr)
+					if scr == "place_world":
+						await _shot(dir, "lang_%s_%s" % [code, scr])
+						problems += await _place_world_fits(code)
+						continue
 					if scr == "menu":
 						# the daily gift and the packages sit under the buttons, never on them
 						var corner: Control = _screen.get_node_or_null("MenuCorner")

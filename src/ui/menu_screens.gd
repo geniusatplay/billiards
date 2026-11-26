@@ -677,7 +677,7 @@ class OnlineScreen extends Screen:
 		_find.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_find.pressed.connect(func():
 			if not Net.signed_in():
-				router.call("go", "account")     # v1.1.13: online play is with an account
+				_sign_in_first()                  # v1.1.13: online play is with an account
 			elif Net.need_name() and not _searching:
 				router.call("go", "account_name")   # (24 Nov 2026: and a username)
 			elif _searching:
@@ -687,8 +687,13 @@ class OnlineScreen extends Screen:
 			else:
 				_search())
 		if not Net.signed_in():
-			_status.text = "Create an account or log in to play online."
-			_find.text = "Create account or log in"
+			if Net.platform_ready():
+				# 26 Nov 2026: the phone's game account, as at launch ("Continue with Google Play Games")
+				_find.text = L.t("Continue with %s") % Net.provider_name(Net.platform())
+				_find.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED     # (translated, with the name in it)
+			else:
+				_status.text = "Create an account or log in to play online."
+				_find.text = "Create account or log in"
 		body.add_child(_find)
 		_build_ready_up()
 		var gap2 := Control.new()
@@ -765,6 +770,32 @@ class OnlineScreen extends Screen:
 
 	func _say(text: String) -> void:
 		_status.text = text
+
+	## 26 Nov 2026: Play Online before the phone's game account has signed in (none at launch, or the player said
+	## no): the phone's own sign-in (Google Play Games / Game Center), then the username for a new account. The
+	## account screen (email, Google, Apple) only on a phone without a game account, or when that sign-in fails.
+	var _signing := false
+
+	func _sign_in_first() -> void:
+		if _signing:
+			return
+		if not Net.platform_ready():
+			router.call("go", "account")
+			return
+		_signing = true
+		_find.disabled = true
+		_say("Signing in…")
+		var r: Dictionary = await Net.platform_sign_in(true)
+		if not is_inside_tree():
+			return
+		_signing = false
+		_find.disabled = false
+		if r.get("ok", false):
+			router.call("go", "account_name" if Net.need_name() else "online")   # (rebuilt as signed in)
+		elif str(r.get("error", "")) == "cancelled":
+			_say("Play 8-ball against another player.")    # (said no: the button is still there)
+		else:
+			router.call("go", "account")     # (no game account on the phone after all, or it failed: the other ways in)
 
 	func _search(resume := false) -> void:
 		_searching = true

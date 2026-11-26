@@ -83,10 +83,15 @@ class WorldArt extends Control:
 
 ## ------------------------------------------------------------ Place world
 class PlaceWorldScreen extends MenuScreens.Screen:
+	const ART_H := 250.0        # the card pictures' height when there is room
+	const ART_MIN_H := 130.0    # ... and the least they give before the whole column is made smaller
 	var _cards: Control         # everything shown while choosing
 	var _placing: Control       # everything shown while putting the table down in the room
 	var _panel: ArPlacePanel
 	var _was := ""              # how the world was before this screen (to put back when placing is given up)
+	var _mid: CenterContainer   # the room under the title
+	var _col: VBoxContainer     # the line under the title and the two cards
+	var _arts: Array = []       # the two card pictures
 
 	func _ready() -> void:
 		_was = Game.world_ready
@@ -133,6 +138,10 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 			"Uses the camera", "Place in front of me", ar_ok, _choose_ar))
 		row.add_child(_card("studio", "cube", "Play in place", "No camera: the table in its own world, wherever you are. The world is the scene you picked in Choose Gear.",
 			"No camera", "Play in place", true, _choose_studio))
+		_mid = mid
+		_col = col
+		_cards.resized.connect(_fit)      # (the screen's size; not the centring box, which follows the cards)
+		_fit.call_deferred()
 		UIKit.fade_in(col, 0.3, 24)
 		# placing (hidden until "Place in front of me")
 		_placing = UIKit.fullrect(Control.new())
@@ -157,6 +166,42 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 		if _placing.visible:
 			_panel.refresh()
 
+	## The cards fit the screen's height (26 Nov 2026: on a phone the screen is 1080 tall in the game's units, and with
+	## the scene's name on the Play in place card the buttons ran off the bottom). The pictures give first, then
+	## the whole column is made smaller. A tall screen (an iPad) keeps everything at full size.
+	func _fit() -> void:
+		if not is_instance_valid(_col):
+			return
+		# the room under the title on the screen (the centring box itself grows to whatever it holds)
+		var avail := _cards.size.y - _mid.offset_top + _mid.offset_bottom
+		if avail <= 0.0:
+			return
+		_mid.scale = Vector2.ONE
+		for a in _arts:
+			(a as Control).custom_minimum_size.y = ART_H
+		var over := _col.get_combined_minimum_size().y - avail
+		if over > 0.0:
+			for a in _arts:
+				(a as Control).custom_minimum_size.y = maxf(ART_MIN_H, ART_H - over)
+			over = _col.get_combined_minimum_size().y - avail
+		if over > 0.0:
+			# still too tall (long words): the whole box made smaller from the middle of its top edge
+			var k := avail / _col.get_combined_minimum_size().y
+			_mid.pivot_offset = Vector2(_cards.size.x * 0.5, 0.0)
+			_mid.scale = Vector2(k, k)
+
+	## For the checks: the two cards' rectangle on the screen, and the room they have (under the title).
+	func cards_rect() -> Rect2:
+		var r := Rect2()
+		for n in ["WorldCard_ar", "WorldCard_studio"]:
+			var c := find_child(n, true, false) as Control
+			if c:
+				r = c.get_global_rect() if r.size == Vector2.ZERO else r.merge(c.get_global_rect())
+		return r
+
+	func room_rect() -> Rect2:
+		return _mid.get_global_rect() if is_instance_valid(_mid) else Rect2()
+
 	## Can this phone show the table in the room at all? (When not, the card says so and its button is off.)
 	func _ar_possible() -> bool:
 		var st: Stage = router.get("stage")
@@ -173,6 +218,7 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 		p.add_child(v)
 		var art := WorldArt.new(id)
 		art.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_arts.append(art)
 		v.add_child(art)
 		var top := UIKit.hbox(14)
 		top.add_child(IconGlyph.make(icon, 56, UIKit.EMERALD if id == "ar" else UIKit.SKY))
