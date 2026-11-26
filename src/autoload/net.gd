@@ -322,7 +322,8 @@ func provider() -> String:
 
 
 static func provider_name(p: String) -> String:
-	return {"google": "Google", "facebook": "Facebook", "apple": "Apple"}.get(p, p)
+	return {"google": "Google", "facebook": "Facebook", "apple": "Apple", "playgames": "Google Play Games",
+		"gamecenter": "Game Center"}.get(p, p)
 
 
 ## 24 Nov 2026: the account's username - the name other players see. "" until it is chosen.
@@ -419,6 +420,11 @@ var social_url := ""              # (tests: the address the sign-in page was ope
 var social_open := true           # (tests: false = don't open a browser)
 var social_way := ""              # how the last sign-in went: "sheet" (Google's), "apple", "tab", "browser"
 var signin_plugin: Object = null  # (tests: a stand-in for the EmeraldAR plugin's sign-in calls)
+## 26 Nov 2026, Randy: "ok scrap facebook login for now" - the game doesn't offer it even if the server has it on.
+var facebook_on := false
+var platforms := {}               # {"playgames": bool, "gamecenter": bool}: the automatic sign-ins the server has on
+var name_suggestion := ""         # the username the server suggested after a new automatic sign-in
+var platform_plugin: Object = null  # (tests: a stand-in for the plugin's platform sign-in calls)
 var as_ios := false               # (tests: offer the sign-ins as on an iPhone)
 
 
@@ -429,6 +435,7 @@ func fetch_providers() -> Dictionary:
 		providers = r["providers"]
 		google_client_id = str(r.get("google_client_id", ""))
 		apple_web = r.get("apple_web", false) == true
+		platforms = r.get("platforms", {}) if typeof(r.get("platforms")) == TYPE_DICTIONARY else {}
 	return providers
 
 
@@ -442,6 +449,8 @@ func offered_providers(ios_flag := -1, store_flag := -1) -> Array:
 	var store := (not Game.dev_tools()) if store_flag < 0 else store_flag == 1
 	var apple: bool = ios and providers.get("apple", false) == true
 	for p in ["google", "facebook"]:
+		if p == "facebook" and not facebook_on:
+			continue
 		if providers.get(p, false) == true and (not ios or apple or not store):
 			out.append(p)
 	if apple:
@@ -595,6 +604,95 @@ func social_sign_in(p: String, rules := false) -> Dictionary:
 	return await _social_end(mine, r)
 
 
+# ---------------------------------------------------------------- the automatic sign-in (26 Nov 2026)
+## Randy: "I kind of like among us's sign in which auto logs in the player with their apple or google play account
+## etc. implement it like this please" + "they should still be prompted to create a name though".
+## Android: Google Play Games (the plugin hands over a one-time code for the server); iPhone: Game Center (the plugin
+## hands over Apple's identity signature). The server checks either (api platform_login) and finds or makes the
+## account; a new one takes this phone's player and progress and asks for a username (name_suggestion).
+
+## "playgames" on Android, "gamecenter" on iPhones, "" elsewhere.
+func platform() -> String:
+	if _ios():
+		return "gamecenter"
+	if OS.get_name() == "Android" or platform_plugin != null:
+		return "playgames"
+	return ""
+
+
+func _platform_plugin() -> Object:
+	if platform_plugin != null:
+		return platform_plugin
+	if OS.get_name() in ["Android", "iOS"] and Engine.has_singleton("EmeraldAR"):
+		return Engine.get_singleton("EmeraldAR")
+	return null
+
+
+## True when this phone can sign in with its game account (the plugin is there and the server has it on).
+func platform_ready() -> bool:
+	return platform() != "" and _platform_plugin() != null and platforms.get(platform(), false) == true
+
+
+## Signs in with the phone's game account. interactive: the platform may show its own sign-in screen when nobody is
+## signed in to it on the phone. Returns the server's reply ({ok, new, need_name, suggest, ...}) or
+## {error: "none" (no game account here), "cancelled", "off", "failed", ...}.
+func platform_sign_in(interactive := true) -> Dictionary:
+	var p := platform()
+	var plug := _platform_plugin()
+	if p == "" or plug == null:
+		return {"ok": false, "error": "none"}
+	if platforms.is_empty():
+		await fetch_providers()
+	if platforms.get(p, false) != true:
+		return {"ok": false, "error": "off"}
+	if not yes(plug.call("platformSignIn", google_client_id, interactive)):
+		return {"ok": false, "error": "none"}
+	var t0 := Time.get_ticks_msec()
+	var st := ""
+	while Time.get_ticks_msec() - t0 < (AUTH_WAIT if interactive else 20.0) * 1000.0:
+		st = str(plug.call("platformState"))
+		if st != "busy" and st != "":
+			break
+		await get_tree().create_timer(0.1).timeout
+	plug.call("platformCancel")
+	print("[net] %s: %s" % [p, st.substr(0, st.find(":")) if st.find(":") > 0 else st])
+	var body := {"platform": p}
+	if st.begins_with("pg:"):
+		body["code"] = st.substr(3).split("\n")[0]
+	elif st.begins_with("gc:"):
+		var j = JSON.parse_string(st.substr(3))
+		if typeof(j) != TYPE_DICTIONARY:
+			return {"ok": false, "error": "failed"}
+		body.merge(j, true)
+		body["platform"] = p
+	elif st == "cancel":
+		return {"ok": false, "error": "cancelled"}
+	elif st.begins_with("error:"):
+		return {"ok": false, "error": "failed"}
+	else:
+		return {"ok": false, "error": "none"}
+	if registered():
+		body.merge(creds(), true)
+	var r := {}
+	for i in 3:
+		r = await api("platform_login", body)
+		if r.get("ok", false) or not str(r.get("error", "")) in ["offline", "bad reply"]:
+			break
+		await get_tree().create_timer(1.5).timeout
+	print("[net] %s sign-in: %s" % [p, "signed in" if r.get("ok", false) else str(r.get("error", "?"))])
+	if not r.get("ok", false):
+		return {"ok": false, "error": "failed" if str(r.get("error", "")) in ["refused", "off"] else str(r.get("error", "failed"))}
+	name_suggestion = str(r.get("suggest", ""))
+	Game.set_s("auto_sign_in", true)
+	_use_account(r)
+	if r.get("new", false):
+		push_progress()           # (a new account: this phone's progress is the account's)
+	else:
+		await pull_progress()     # (an account made before: as logging in)
+		push_progress()
+	return r
+
+
 ## Waits while the plugin's sign-in state is one of `waiting`; returns the state it ends in.
 func _sign_state(plug: Object, mine: int, waiting: Array) -> String:
 	var t0 := Time.get_ticks_msec()
@@ -653,6 +751,8 @@ func log_in(mail: String, password: String) -> Dictionary:
 ## Signs this phone out. The progress stays with the account (log in again to get it back); the phone starts
 ## afresh as a new, anonymous player.
 func log_out() -> void:
+	if provider() in ["playgames", "gamecenter"]:
+		Game.set_s("auto_sign_in", false)     # (signed out on purpose: no automatic sign-in until they choose it again)
 	if registered():
 		api("logout", creds())
 	_forget_account()
@@ -766,7 +866,12 @@ func pull_progress() -> void:
 	if int(p.get("xp", 0)) > Game.xp():
 		Game.progress.erase("curve")              # a copy saved by a version before v1.1.7 has none
 		for k in SYNCED:
-			if p.has(k):
+			if p.has(k) and p[k] == null:          # the server's copy never had it (it was saved as null): the default
+				if Game.fresh_progress().has(k):
+					Game.progress[k] = Game.fresh_progress()[k]
+				else:
+					Game.progress.erase(k)
+			elif p.has(k):
 				Game.progress[k] = p[k]
 		Game.progress["xp"] = int(Game.progress["xp"])
 		if typeof(Game.progress.get("pk_time")) != TYPE_DICTIONARY:

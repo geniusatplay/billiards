@@ -40,6 +40,7 @@ const DEFAULTS := {
 	"control_scheme": "pro_dial", "aim_guide": 0, "left_handed": false, "fine_aim_scale": 1.0,
 	"phone_cue_tilt_elevation": false, "phone_cue_follow_phone": true,
 	# feel
+	"auto_sign_in": true,      # 26 Nov 2026: sign in with the phone's game account at the start (off after a sign-out)
 	"haptics": true, "sfx_volume": 0.9, "music_volume": 0.8, "music_in_game": false, "last_song": "", "language": "auto", "reduced_motion": false,
 	# looks
 	"ball_set": "balls", "cue_skin": "cue_emerald_classic", "table_style": "emerald", "scene": "lounge",
@@ -399,7 +400,7 @@ func chest_xp() -> int:
 ## The advert that turns this wait into 2 hours (it "saves 4 hours"; the button: "Open 4 Hours Faster With Ad"):
 ## once per wait, and only while there is something to shorten.
 func can_cut_chest() -> bool:
-	return not chest_ready() and not bool(progress.get("chest_cut", false))
+	return not chest_ready() and progress.get("chest_cut", false) != true
 
 
 ## After the advert: the chest is ready 2 hours after it was last opened (at once if that time has passed).
@@ -445,7 +446,7 @@ func open_gift_chest() -> Dictionary:
 
 ## The tutorial was played to the end (kept with the account, so it pays once per player).
 func tutorial_done() -> bool:
-	return bool(progress.get("tutorial", false))
+	return progress.get("tutorial", false) == true
 
 
 func finish_tutorial() -> bool:
@@ -613,7 +614,13 @@ func _load() -> void:
 	if typeof(parsed.get("progress")) == TYPE_DICTIONARY:
 		progress.erase("curve")       # a save from before v1.1.7 has none (see migrate_levels_117)
 		for k in parsed["progress"].keys():
-			progress[k] = parsed["progress"][k]
+			if parsed["progress"][k] == null:        # (a copy that never had it: the default)
+				if fresh_progress().has(k):
+					progress[k] = fresh_progress()[k]
+				else:
+					progress.erase(k)
+			else:
+				progress[k] = parsed["progress"][k]
 		progress.erase("daily")       # the daily gift was replaced by the XP chest (v1.1.2)
 		if typeof(progress.get("pk_time")) != TYPE_DICTIONARY:
 			progress["pk_time"] = {}

@@ -136,6 +136,8 @@ func _ready() -> void:
 			_email.grab_focus())
 	_email.text_submitted.connect(func(_t: String): _pass.grab_focus())
 	_pass.text_submitted.connect(func(_t: String): _submit())
+	if mode == Mode.NAME and _user.text == "" and Net.name_suggestion != "":
+		_user.text = Net.name_suggestion       # (the server's suggestion after the automatic sign-in)
 	_refresh()
 	_load_providers()
 
@@ -147,6 +149,13 @@ func _load_providers() -> void:
 		return
 	for c in _social_row.get_children():
 		c.queue_free()
+	if Net.platform_ready():
+		# 26 Nov 2026: the phone's game account first (Google Play Games / Game Center)
+		var g := UIKit.button(L.t("Continue with %s") % Net.provider_name(Net.platform()), "", "user", 330)
+		g.name = "Social_platform"
+		g.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		g.pressed.connect(func(): _social_go("platform"))
+		_social_row.add_child(g)
 	for p in Net.offered_providers():
 		var b := UIKit.button(L.t("Continue with %s") % Net.provider_name(p), "", "user", 330)
 		b.name = "Social_" + p
@@ -154,7 +163,7 @@ func _load_providers() -> void:
 		var which: String = p
 		b.pressed.connect(func(): _social_go(which))
 		_social_row.add_child(b)
-	_social.visible = mode != Mode.NAME and not Net.offered_providers().is_empty()
+	_social.visible = mode != Mode.NAME and _social_row.get_child_count() > 0
 
 
 func _social_done() -> void:
@@ -184,7 +193,14 @@ func _social_go(p: String) -> void:
 	DisplayServer.virtual_keyboard_hide()
 	_attempt += 1
 	var mine := _attempt
-	var r: Dictionary = await Net.social_sign_in(p, mode == Mode.CREATE)
+	var r: Dictionary
+	if p == "platform":
+		_social_cancel.visible = false        # (the platform's own screen has its own way out)
+		r = await Net.platform_sign_in(true)
+		if not r.get("ok", false) and str(r.get("error", "")) == "none":
+			r = {"ok": false, "error": "cancelled"}
+	else:
+		r = await Net.social_sign_in(p, mode == Mode.CREATE)
 	if not is_inside_tree() or mine != _attempt:
 		return
 	_social_done()
@@ -230,7 +246,7 @@ func _refresh() -> void:
 	_pass.visible = mode != Mode.NAME
 	_switch.visible = mode != Mode.NAME
 	_rules.visible = mode != Mode.LOGIN
-	_social.visible = mode != Mode.NAME and not Net.offered_providers().is_empty()
+	_social.visible = mode != Mode.NAME and _social_row != null and _social_row.get_child_count() > 0
 	_rules_line.text = "By choosing a username you agree to the Player rules." if mode == Mode.NAME \
 		else "By creating an account you agree to the Player rules."
 	_user.placeholder_text = "Username (3-16 letters or numbers)"

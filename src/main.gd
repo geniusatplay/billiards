@@ -26,6 +26,26 @@ var _first_match := true
 var _tour_dir := ""          # (the automated tour opens the share popup itself)     # the first match of a launch also starts behind the short cover (see _cover_and_warm)
 
 
+## 26 Nov 2026 (Randy: "I kind of like among us's sign in which auto logs in the player with their apple or google play
+## account ... they should still be prompted to create a name though"): at the start, a phone that isn't signed in
+## signs in with its Google Play Games / Game Center account by itself; a new account then asks for its username.
+## No game account (or the player said no, or signed out on purpose): the account screen, as before.
+func _auto_sign_in() -> void:
+	if Game.settings.get("auto_sign_in", true) == true:
+		await Net.fetch_providers()
+		if Net.platform_ready():
+			var r: Dictionary = await Net.platform_sign_in(true)
+			if r.get("ok", false):
+				if Net.need_name():
+					if game == null:
+						go("account_name")
+				else:
+					toast(L.t("Signed in as %s") % Net.username())
+				return
+	if not Net.signed_in() and game == null and not (_screen is AccountScreen):
+		go("account")
+
+
 func _ready() -> void:
 	print("[boot] engine ready at %d ms" % Time.get_ticks_msec())
 	# The first frame with the 3D table in it takes seconds on a phone (shaders are compiled on first use).
@@ -96,7 +116,7 @@ func _ready() -> void:
 		_boot(0.95)
 		go("menu")
 		if not Net.signed_in() and not OS.get_cmdline_user_args().has("--offline"):
-			go("account")        # v1.1.13: ask for an account at every start until this phone is signed in
+			_auto_sign_in()      # 26 Nov 2026: the phone's game account first, as Among Us; else ask (v1.1.13)
 		elif Net.need_name():
 			go("account_name")   # (24 Nov 2026: an account without a username chooses one first)
 		Net.name_needed.connect(func():
@@ -1770,7 +1790,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device", "autosign"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -2461,6 +2481,7 @@ func _tour_step(dir: String, s: String) -> void:
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("READYUP %s" % ("PASS" if all_ok else "FAIL"))
 		"social":
+			Net.facebook_on = true     # (26 Nov 2026: Facebook is off in the game; these tours still cover it)
 			# 24 Nov 2026 (Randy: "add sign in with google or facebook on the apk which will fast create their account.
 			# and add ios on the ios version"): the account screen offers the sign-ins the server has on; one opens the
 			# browser (here: the test plays the browser with the in-memory server), the game waits, a new account takes
@@ -2642,6 +2663,7 @@ func _tour_step(dir: String, s: String) -> void:
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("SOCIAL %s" % ("PASS" if all_ok else "FAIL"))
 		"social_native":
+			Net.facebook_on = true     # (26 Nov 2026: Facebook is off in the game; these tours still cover it)
 			# 24 Nov 2026 (Randy: "please do it the smoothe way with their sign in screens in app which doesnt need the
 			# browser to sign in"): Google's own account sheet on Android 14+ and Apple's on iPhones hand the game a
 			# token the server checks (auth_native); everything else is the sign-in page in a tab / sheet over the
@@ -2851,7 +2873,127 @@ func _tour_step(dir: String, s: String) -> void:
 				Net.cancel_social()
 				await _wait(0.5)
 			print("[signin] result: %s" % [out[0]])
+		"autosign":
+			# 26 Nov 2026 (Randy: "I kind of like among us's sign in which auto logs in the player with their apple or google
+			# play account etc." + "they should still be prompted to create a name though"): at the start a phone that
+			# isn't signed in signs in with its Google Play Games / Game Center account by itself; new -> username.
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			_end_match()
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			var keep_auto = Game.settings.get("auto_sign_in", true)
+			Game.progress = Game.fresh_progress()
+			Game.set_s("ar_mode", "studio")
+			Game.set_s("auto_sign_in", true)
+			Net.platforms = {}
+			Net.facebook_on = false
+			var sp = load("res://tests/signin_standin.gd").new()
+			Net.platform_plugin = sp
+			Net.signin_plugin = sp
+			var res := []
+			var chk := func(what: String, good: bool, info: String):
+				res.append([what + ("  " + info if info != "" else ""), good])
+			await Net.ensure_player()
+			Game.progress["xp"] = 140
+			# --- Android, first start: Play Games signs in by itself -> a new account -> the username, suggested
+			sp.platform_answer = "pg:pgc-501-KaiLee\nKai Lee"
+			_stack.clear()
+			go("menu")
+			var t0 := Time.get_ticks_msec()
+			await _auto_sign_in()
+			await _wait(0.5)
+			var sc: Control = _screen
+			var uf: LineEdit = sc.find_child("AccountUsername", true, false) if sc else null
+			var ps: Array = sp.last("platformSignIn")
+			chk.call("start, not signed in: Play Games asked (the server's client id, its own screen allowed), signed in, a new account with this phone's 140 XP",
+				ps.size() == 3 and ps[1] == srv.google_client_id and ps[2] == true and Net.signed_in() and Net.provider() == "playgames"
+				and srv.accounts.has("playgames:501") and Game.xp() == 140, "%s %s" % [str(ps), Net.provider()])
+			chk.call("... the username asked at once, the Play Games name suggested ('KaiLee'), the rules line under it",
+				sc is AccountScreen and sc.get("mode") == AccountScreen.Mode.NAME and uf != null and uf.text == "KaiLee"
+				and (sc.find_child("AccountRules", true, false) as Control).visible, uf.text if uf else "-")
+			await _shot(dir, "autosign_1_name")
+			uf.text = "KaiPool"
+			(sc.find_child("AccountGo", true, false) as Button).pressed.emit()
+			await _wait(1.0)
+			chk.call("... the name chosen -> back to the menu, signed in as KaiPool", Net.username() == "KaiPool" and not (_screen is AccountScreen), Net.username())
+			# --- a sign-out on purpose: no automatic sign-in next time; the button is there
+			Net.log_out()
+			await _wait(0.3)
+			var n_before: int = sp.count("platformSignIn")
+			_stack.clear()
+			go("menu")
+			await _auto_sign_in()
+			await _wait(0.8)
+			sc = _screen
+			var pb: Button = sc.find_child("Social_platform", true, false) if sc else null
+			chk.call("signed out on purpose -> next start: no automatic sign-in, the account screen with 'Continue with Google Play Games' first",
+				sp.count("platformSignIn") == n_before and sc is AccountScreen and pb != null and pb.text == L.t("Continue with %s") % "Google Play Games"
+				and pb.get_index() == 0, pb.text if pb else "-")
+			chk.call("... Facebook not offered (scrapped for now) though the server has it on", sc.find_child("Social_facebook", true, false) == null
+				and srv.providers.get("facebook", false) == true, "")
+			await _shot(dir, "autosign_2_account")
+			sp.platform_answer = "pg:pgc-501\nKai Lee"
+			pb.pressed.emit()
+			await _wait(1.2)
+			chk.call("... the button -> the same account (no name asked again), back with 'Signed in as KaiPool'",
+				Net.signed_in() and Net.username() == "KaiPool" and not (_screen is AccountScreen) and Game.settings.get("auto_sign_in") == true, Net.username())
+			# --- no game account on the phone (or the player said no): the account screen, as before
+			Net.log_out()
+			Game.set_s("auto_sign_in", true)
+			for ans in ["none", "cancel"]:
+				sp.platform_answer = ans
+				_stack.clear()
+				go("menu")
+				await _auto_sign_in()
+				await _wait(0.6)
+				chk.call("no Play Games player ('%s') -> the account screen" % ans, _screen is AccountScreen and not Net.signed_in(), "")
+			# --- iPhone: Game Center
+			Net.as_ios = true
+			sp.as_android = false
+			Net.platforms = {}
+			sp.platform_answer = "gc:" + JSON.stringify({"url": "https://static.gc.apple.com/public-key/gc-prod-6.cer", "sig": "ok-1", "salt": "c2FsdA==",
+				"ts": "1", "team_id": "T:_gc77", "bundle": "com.emeraldvortexgames.emeraldbreak", "alias": "Amara"})
+			Game.progress = Game.fresh_progress()
+			await Net.ensure_player()
+			_stack.clear()
+			go("menu")
+			await _auto_sign_in()
+			await _wait(0.6)
+			sc = _screen
+			uf = sc.find_child("AccountUsername", true, false) if sc else null
+			chk.call("iPhone: Game Center signs in by itself -> a new account, 'Amara' suggested", Net.signed_in() and Net.provider() == "gamecenter"
+				and srv.accounts.has("gamecenter:T:_gc77") and sc is AccountScreen and sc.get("mode") == AccountScreen.Mode.NAME and uf.text == "Amara", uf.text if uf else "-")
+			await _shot(dir, "autosign_3_iphone_name")
+			chk.call("Settings would say 'Signed in with Game Center'", L.t("Signed in with %s") % Net.provider_name(Net.provider()) == L.t("Signed in with %s") % "Game Center", "")
+			# --- the server has the platform off: straight to the account screen
+			Net.log_out()
+			Game.set_s("auto_sign_in", true)
+			srv.platforms = {"playgames": false, "gamecenter": false}
+			Net.platforms = {}
+			var n2: int = sp.count("platformSignIn")
+			_stack.clear()
+			go("menu")
+			await _auto_sign_in()
+			await _wait(0.6)
+			chk.call("platform off on the server -> not asked, the account screen", sp.count("platformSignIn") == n2 and _screen is AccountScreen, "")
+			Net.as_ios = false
+			Net.platform_plugin = null
+			Net.signin_plugin = null
+			Net.platforms = {}
+			Net.fake = null
+			Net.set("_save_in", -1.0)
+			Game.progress = keep_pr
+			Game.set_s("auto_sign_in", keep_auto)
+			Game.request_save()
+			_stack.clear()
+			go("menu")
+			var all_ok := true
+			for r in res:
+				all_ok = all_ok and r[1]
+				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("AUTOSIGN %s" % ("PASS" if all_ok else "FAIL"))
 		"lang_social":
+			Net.facebook_on = true     # (26 Nov 2026: Facebook is off in the game; these tours still cover it)
 			# the sign-in texts in every language: the account screen (the buttons, "or", waiting), Settings signed in
 			# with Google and deleting without a password. --langs=de,ta; pictures for en, ta, ar (--allshots for all)
 			var langs := Loc.codes()

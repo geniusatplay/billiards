@@ -38,6 +38,9 @@ public:
 	bool openAuthTab(const String &p_url, const String &p_status_url, const String &p_k);
 	String signInState();
 	void signInCancel();
+	bool platformSignIn(const String &p_server_client_id, bool p_interactive);
+	String platformState();
+	void platformCancel();
 	String getLastError();
 	String getInfo();
 	bool start(int p_w, int p_h);

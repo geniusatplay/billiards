@@ -18,6 +18,7 @@
 #import <ARKit/ARKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AuthenticationServices/AuthenticationServices.h>
+#import <GameKit/GameKit.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -701,6 +702,139 @@ static EARSignIn *ear_sign_in() {
 	return s;
 }
 
+// ------------------------------------------------------------------ Game Center sign-in (26 Nov 2026)
+// Randy: "I kind of like among us's sign in which auto logs in the player with their apple or google play account".
+// The player's Game Center account signs them in by itself: iOS shows its "Welcome back" banner, or its own Game Center
+// sign-in sheet when the phone isn't signed in (only when the game asks with interactive = true). Apple then signs
+// (teamPlayerID + bundle id + timestamp + salt); the game's server checks that signature with Apple's certificate.
+// platformState(): "" idle, "busy", "gc:{json}", "none" (no Game Center player), "cancel", "error:...".
+@interface EARGameCenter : NSObject
+@property(atomic, copy) NSString *state;
+@property(atomic) NSInteger run;
+@property(atomic) BOOL handlerSet;
+@property(atomic) BOOL interactive;
+@property(nonatomic, strong) UIViewController *pending;
+@end
+
+@implementation EARGameCenter
+
+- (instancetype)init {
+	if ((self = [super init])) {
+		_state = @"";
+	}
+	return self;
+}
+
+- (void)finish:(NSInteger)mine state:(NSString *)s {
+	if (mine == self.run) {
+		self.state = s;
+		NSLog(@"[EmeraldAR] game center: %@", [s hasPrefix:@"gc:"] ? @"signed in" : s);
+	}
+}
+
+- (void)present:(UIViewController *)vc {
+	UIViewController *top = ear_key_window().rootViewController;
+	while (top.presentedViewController) {
+		top = top.presentedViewController;
+	}
+	if (top) {
+		[top presentViewController:vc animated:YES completion:nil];
+	}
+}
+
+- (BOOL)start:(BOOL)interactive {
+	NSInteger mine = ++self.run;
+	self.state = @"busy";
+	self.interactive = interactive;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (mine != self.run) {
+			return;
+		}
+		GKLocalPlayer *lp = GKLocalPlayer.localPlayer;
+		if (lp.isAuthenticated) {
+			[self verify:mine];
+			return;
+		}
+		if (self.handlerSet) {
+			// (iOS calls the handler once per launch and again when the player signs in; a sheet it handed us earlier
+			// can still be shown)
+			if (self.pending && interactive) {
+				UIViewController *vc = self.pending;
+				self.pending = nil;
+				[self present:vc];
+			} else {
+				[self finish:mine state:@"none"];
+			}
+			return;
+		}
+		self.handlerSet = YES;
+		__weak EARGameCenter *weak = self;
+		lp.authenticateHandler = ^(UIViewController *vc, NSError *error) {
+			EARGameCenter *me = weak;
+			if (!me) {
+				return;
+			}
+			if (vc) {
+				if (me.interactive) {
+					[me present:vc];
+				} else {
+					me.pending = vc;
+					[me finish:me.run state:@"none"];
+				}
+				return;
+			}
+			if (GKLocalPlayer.localPlayer.isAuthenticated) {
+				[me verify:me.run];
+			} else if (error.code == GKErrorCancelled) {
+				[me finish:me.run state:@"cancel"];
+			} else if (error) {
+				[me finish:me.run state:[NSString stringWithFormat:@"error:%ld %@", (long)error.code, error.localizedDescription]];
+			} else {
+				[me finish:me.run state:@"none"];
+			}
+		};
+	});
+	return YES;
+}
+
+- (void)verify:(NSInteger)mine {
+	GKLocalPlayer *lp = GKLocalPlayer.localPlayer;
+	[lp fetchItemsForIdentityVerificationSignature:^(NSURL *url, NSData *sig, NSData *salt, uint64_t ts, NSError *error) {
+		if (error || !url || !sig || !salt) {
+			[self finish:mine state:[NSString stringWithFormat:@"error:%ld %@", (long)error.code, error.localizedDescription ?: @"no signature"]];
+			return;
+		}
+		NSDictionary *d = @{
+			@"url" : url.absoluteString ?: @"",
+			@"sig" : [sig base64EncodedStringWithOptions:0],
+			@"salt" : [salt base64EncodedStringWithOptions:0],
+			@"ts" : [NSString stringWithFormat:@"%llu", ts],
+			@"team_id" : lp.teamPlayerID ?: @"",
+			@"bundle" : NSBundle.mainBundle.bundleIdentifier ?: @"",
+			@"alias" : lp.alias ?: @"",
+		};
+		NSData *j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+		NSString *js = j ? [[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding] : nil;
+		[self finish:mine state:js ? [@"gc:" stringByAppendingString:js] : @"error:json"];
+	}];
+}
+
+- (void)cancel {
+	self.run = self.run + 1;
+	self.state = @"";
+}
+
+@end
+
+static EARGameCenter *ear_game_center() {
+	static EARGameCenter *g = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		g = [EARGameCenter new];
+	});
+	return g;
+}
+
 #define EAR_HOST ((__bridge EARHost *)host)
 
 namespace godot {
@@ -782,6 +916,20 @@ void EmeraldAR::signInCancel() {
 	[ear_sign_in() cancel];
 }
 
+// 26 Nov 2026: the automatic sign-in with the phone's game account (Game Center here). See EARGameCenter.
+bool EmeraldAR::platformSignIn(const String &p_server_client_id, bool p_interactive) {
+	(void)p_server_client_id;   // (Android's Play Games needs it; Game Center doesn't)
+	return [ear_game_center() start:p_interactive];
+}
+
+String EmeraldAR::platformState() {
+	return ear_str(ear_game_center().state);
+}
+
+void EmeraldAR::platformCancel() {
+	[ear_game_center() cancel];
+}
+
 String EmeraldAR::getLastError() {
 	return ear_str([EAR_HOST lastError]);
 }
@@ -837,6 +985,9 @@ void EmeraldAR::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("openAuthTab", "url", "status_url", "k"), &EmeraldAR::openAuthTab);
 	ClassDB::bind_method(D_METHOD("signInState"), &EmeraldAR::signInState);
 	ClassDB::bind_method(D_METHOD("signInCancel"), &EmeraldAR::signInCancel);
+	ClassDB::bind_method(D_METHOD("platformSignIn", "server_client_id", "interactive"), &EmeraldAR::platformSignIn);
+	ClassDB::bind_method(D_METHOD("platformState"), &EmeraldAR::platformState);
+	ClassDB::bind_method(D_METHOD("platformCancel"), &EmeraldAR::platformCancel);
 	ClassDB::bind_method(D_METHOD("getLastError"), &EmeraldAR::getLastError);
 	ClassDB::bind_method(D_METHOD("getInfo"), &EmeraldAR::getInfo);
 	ClassDB::bind_method(D_METHOD("start", "w", "h"), &EmeraldAR::start);
