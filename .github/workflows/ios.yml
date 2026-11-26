@@ -1,7 +1,8 @@
 name: iPhone build
 
 # Builds Emerald Online 8 Ball Pool AR for iPhone / iPad on a GitHub Mac: the ARKit plugin, the Godot export, the Xcode build.
-# The result is an unsigned .ipa, published as the "ios-latest" release, for installing with Sideloadly.
+# The result is an unsigned .ipa, published as the "ios-latest" release, for installing with Sideloadly, and (once the
+# signing secrets are in the repo) the same app signed for the App Store and sent to TestFlight.
 on:
   push:
     branches: [main]
@@ -91,6 +92,18 @@ jobs:
             --target "$GITHUB_SHA" --prerelease \
             --title "Emerald 8 Ball Pool $VER for iPhone (${KIND}unsigned, for Sideloadly)" \
             --notes "Built from ${GITHUB_SHA::7}. Install with Sideloadly: drag EmeraldBreak.ipa in, sign in with your Apple ID, Start. With a free Apple ID the app runs for 7 days, then install it again."
+
+      - name: Sign and send to TestFlight (once the repo has the signing secrets)
+        # 26 Nov 2026: the "Testers" group in App Store Connect gets every build. Skips itself until the repo has the
+        # secrets ASC_KEY_P8 (keys\AuthKey_2CAD29DLAB.p8) and IOS_DIST_KEY (keys\ios_distribution_key.pem)
+        # (Settings > Secrets and variables > Actions).
+        env:
+          ASC_KEY_ID: "2CAD29DLAB"          # App Store Connect API key "Emerald 8 Ball Pool CI" (not secret on its own)
+          ASC_ISSUER_ID: "530c1faa-a59e-4a14-a33a-8adaa953e2db"
+          ASC_APP_ID: "6839666893"
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          IOS_DIST_KEY: ${{ secrets.IOS_DIST_KEY }}
+        run: bash ios_plugin/ci.sh testflight
 
       - name: Test on an iPhone simulator (plugin, safe area, AR start-up)
         # off unless started by hand (Actions -> iPhone build -> Run workflow -> tick the box): it's slow

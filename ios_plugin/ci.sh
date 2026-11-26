@@ -8,6 +8,8 @@
 #   ios_plugin/ci.sh ipa      build it, unsigned, into build/ios/EmeraldBreak-<version>.ipa (for Sideloadly)
 #   ios_plugin/ci.sh sim      run it on an iPhone simulator with a Dynamic Island: the game's "ios_check" test
 #                             (plugin loaded, safe area, AR start-up) -> build/ios/sim/ (pictures + log)
+#   ios_plugin/ci.sh testflight  sign the app built by "ipa" for the App Store and send it to TestFlight (only when
+#                             the repo has the secrets ASC_KEY_P8 and IOS_DIST_KEY; otherwise it says so and stops)
 #
 # The .ipa is unsigned on purpose: Sideloadly (or AltStore, or Xcode) signs it with your own Apple ID when it
 # installs it on the phone.
@@ -204,12 +206,115 @@ for want in ("iPhone 17 Pro", "iPhone 16 Pro", "Pro", "iPhone"):
 	grep -q "IOS_CHECK PASS" sim/godot.log
 }
 
+# TestFlight (26 Nov 2026, Randy: TestFlight for the iPhone testers, signed uploads from this build). The app from
+# "ipa" (still unsigned) is signed here with the team's Apple Distribution certificate and the App Store profile
+# "Emerald 8 Ball Pool App Store" (Game Center + Sign in with Apple), then uploaded with the App Store Connect API key.
+# Secrets (GitHub: Settings > Secrets and variables > Actions): ASC_KEY_P8 = the .p8 file's text, IOS_DIST_KEY = the
+# certificate's private key (keys\ios_distribution_key.pem on Randy's PC). The certificate and the profile come from
+# Apple through the API (ios_plugin/asc.py). Each upload gets the build number of the GitHub run.
+step_testflight() {
+	if [ -z "${ASC_KEY_P8:-}" ] || [ -z "${IOS_DIST_KEY:-}" ] || [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ]; then
+		say "TestFlight: the signing secrets are not in the repo yet - skipped"
+		return 0
+	fi
+	cd "$ROOT/build/ios"
+	local app_src="EmeraldBreak.xcarchive/Products/Applications/EmeraldBreak.app"
+	test -d "$app_src"
+	local work="${RUNNER_TEMP:-/tmp}/testflight"
+	rm -rf "$work"
+	mkdir -p "$work"
+	chmod 700 "$work"
+	local kc="$work/sign.keychain-db"
+	local kcpass p12pass
+	kcpass="$(openssl rand -hex 16)"
+	p12pass="$(openssl rand -hex 16)"
+	cleanup_tf() {
+		security delete-keychain "$kc" 2>/dev/null || true
+		rm -rf "$work" ~/.appstoreconnect/private_keys
+	}
+	trap cleanup_tf EXIT
+	mkdir -p ~/.appstoreconnect/private_keys
+	( umask 077; printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+	  printf '%s\n' "$IOS_DIST_KEY" > "$work/dist.key" )
+
+	say "TestFlight: the certificate and the App Store profile from Apple"
+	python3 -m pip install --user --break-system-packages -q pyjwt cryptography 2>/dev/null \
+		|| python3 -m pip install --user -q pyjwt cryptography
+	python3 "$ROOT/ios_plugin/asc.py" fetch "$work"
+
+	say "TestFlight: a keychain with the certificate"
+	/usr/bin/openssl x509 -inform DER -in "$work/dist.cer" -out "$work/dist.pem"
+	/usr/bin/openssl pkcs12 -export -inkey "$work/dist.key" -in "$work/dist.pem" -out "$work/dist.p12" -passout "pass:$p12pass"
+	security create-keychain -p "$kcpass" "$kc"
+	security set-keychain-settings -lut 3600 "$kc"
+	security unlock-keychain -p "$kcpass" "$kc"
+	security import "$work/dist.p12" -k "$kc" -P "$p12pass" -T /usr/bin/codesign -T /usr/bin/security
+	security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$kc" > /dev/null
+	security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+	# Apple's intermediate certificate (usually installed with Xcode already)
+	curl -fsSL -o "$work/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer \
+		&& security import "$work/AppleWWDRCAG3.cer" -k "$kc" 2>/dev/null || true
+	local ident
+	ident="$(security find-identity -v -p codesigning "$kc" | awk '/Apple Distribution|iPhone Distribution/ {print $2; exit}')"
+	test -n "$ident" || { security find-identity -v -p codesigning "$kc"; echo "no distribution identity"; exit 1; }
+
+	say "TestFlight: signing the app"
+	rm -rf "$work/Payload"
+	mkdir -p "$work/Payload"
+	cp -R "$app_src" "$work/Payload/"
+	local app="$work/Payload/EmeraldBreak.app"
+	local build="${GITHUB_RUN_NUMBER:-$(date +%s)}"
+	plutil -replace CFBundleVersion -string "$build" "$app/Info.plist"
+	plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$app/Info.plist"
+	cp "$work/app.mobileprovision" "$app/embedded.mobileprovision"
+	security cms -D -i "$work/app.mobileprovision" > "$work/profile.plist"
+	/usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$work/profile.plist" > "$work/ent.plist"
+	local team appid
+	team="$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.team-identifier" "$work/ent.plist")"
+	appid="$(/usr/libexec/PlistBuddy -c "Print :application-identifier" "$work/ent.plist")"
+	# the app's own keychain group instead of the profile's wildcard
+	/usr/libexec/PlistBuddy -c "Delete :keychain-access-groups" "$work/ent.plist" 2>/dev/null || true
+	/usr/libexec/PlistBuddy -c "Add :keychain-access-groups array" -c "Add :keychain-access-groups:0 string $appid" "$work/ent.plist"
+	/usr/libexec/PlistBuddy -c "Print :com.apple.developer.game-center" "$work/ent.plist" > /dev/null \
+		|| { echo "the profile has no Game Center: regenerate it"; exit 1; }
+	echo "team $team, app $appid, build $(plutil -extract CFBundleShortVersionString raw "$app/Info.plist") ($build)"
+	find "$app" -name "_CodeSignature" -type d -prune -exec rm -rf {} +
+	local f
+	if [ -d "$app/Frameworks" ]; then
+		for f in "$app"/Frameworks/*; do
+			[ -e "$f" ] || continue
+			codesign -f -s "$ident" --keychain "$kc" "$f"
+		done
+	fi
+	codesign -f -s "$ident" --keychain "$kc" --entitlements "$work/ent.plist" "$app"
+	codesign --verify --deep --strict "$app"
+	codesign -d --entitlements - --xml "$app" 2>/dev/null | plutil -p - | grep -E "game-center|applesignin|beta-reports|application-identifier" || true
+	local ipa="$work/EmeraldBreak-${VERSION}-${build}.ipa"
+	( cd "$work" && zip -qry "$ipa" Payload )
+	ls -la "$ipa"
+
+	say "TestFlight: uploading build $build"
+	local out
+	if out="$(xcrun altool --upload-app -f "$ipa" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1)"; then
+		echo "$out" | tail -n 15
+	else
+		echo "$out" | tail -n 40
+		say "TestFlight: trying the newer upload command"
+		xcrun altool --upload-package "$ipa" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" \
+			--apple-id "${ASC_APP_ID:-6839666893}" --bundle-id com.emeraldvortexgames.emeraldbreak \
+			--bundle-version "$build" --bundle-short-version-string "$VERSION" 2>&1 | tail -n 40
+		test "${PIPESTATUS[0]}" -eq 0
+	fi
+	say "TestFlight: sent. Apple processes it for a few minutes, then the \"Testers\" group gets it."
+}
+
 case "${1:-}" in
 	plugin) step_plugin ;;
 	godot) step_godot ;;
 	export) step_export ;;
 	ipa) step_ipa ;;
 	sim) step_sim ;;
+	testflight) step_testflight ;;
 	all) step_plugin; step_godot; step_export; step_ipa ;;
-	*) echo "usage: $0 plugin|godot|export|ipa|all"; exit 2 ;;
+	*) echo "usage: $0 plugin|godot|export|ipa|sim|testflight|all"; exit 2 ;;
 esac
