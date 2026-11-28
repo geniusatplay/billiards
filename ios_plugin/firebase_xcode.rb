@@ -12,6 +12,14 @@ unless target.resources_build_phase.files_references.any? { |r| r && r.path == p
   ref = project.main_group.new_reference(plist)
   target.resources_build_phase.add_file_reference(ref, true)
 end
+# Firebase's static Swift libraries need the Swift runtime linked into the (Objective-C++) app: one empty Swift file in
+# the target makes Xcode do that
+swift_name = 'FirebaseSwiftLink.swift'
+File.write(File.join(File.dirname(proj_path), swift_name),
+           "// Makes Xcode link the Swift runtime that Firebase's static libraries need (ios_plugin/firebase_xcode.rb).\nimport Foundation\n")
+unless target.source_build_phase.files_references.any? { |r| r && r.path == swift_name }
+  target.source_build_phase.add_file_reference(project.main_group.new_reference(swift_name), true)
+end
 target.build_configurations.each do |c|
   %w[OTHER_LDFLAGS LIBRARY_SEARCH_PATHS FRAMEWORK_SEARCH_PATHS HEADER_SEARCH_PATHS].each do |k|
     v = c.build_settings[k]
@@ -19,6 +27,7 @@ target.build_configurations.each do |c|
     c.build_settings[k] = (['$(inherited)'] + arr).uniq
   end
   c.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+  c.build_settings['SWIFT_VERSION'] ||= '5.0'
 end
 unless target.shell_script_build_phases.any? { |p| p.name == 'Crashlytics dSYM upload' }
   phase = target.new_shell_script_build_phase('Crashlytics dSYM upload')
@@ -31,4 +40,4 @@ unless target.shell_script_build_phases.any? { |p| p.name == 'Crashlytics dSYM u
                        '$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)']
 end
 project.save
-puts "Firebase: #{plist} in #{target.name}'s resources, $(inherited) linker settings, Crashlytics dSYM upload phase"
+puts "Firebase: #{plist} in #{target.name}'s resources, $(inherited) linker settings, Swift runtime, Crashlytics dSYM upload phase"

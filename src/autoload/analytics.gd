@@ -27,8 +27,11 @@ const PARAMS_MAX := 25
 ## The EEA (EU + Iceland, Liechtenstein, Norway), the UK and Switzerland: ask before collecting.
 const CONSENT_REGIONS := ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV",
 	"LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO", "GB", "UK", "CH"]
-## The custom dimensions registered in Google Analytics (Admin → Custom definitions), so these show in reports.
-const DIMENSIONS := ["game", "mode", "ar", "opponent", "result", "outcome", "reason", "phase", "placement", "screen"]
+## The custom dimensions registered in Google Analytics (Admin → Custom definitions, event scope), so these show in
+## reports; and the custom metrics (seconds: match / lobby / AR placement length, wait_seconds: matchmaking wait).
+## (Screens use Google's own screen_name / screen_class.)
+const DIMENSIONS := ["game", "mode", "ar", "opponent", "result", "outcome", "reason", "phase", "placement"]
+const METRICS := ["seconds", "wait_seconds"]
 
 ## Kept for the tours and the debug menu: the last events, newest last ([name, params]).
 var recent: Array = []

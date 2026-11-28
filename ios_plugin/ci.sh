@@ -114,6 +114,8 @@ step_firebase() {
 platform :ios, '$MIN_IOS'
 install! 'cocoapods', :warn_for_unused_master_specs_repo => false
 target 'EmeraldBreak' do
+  # (static frameworks: Firebase's Swift parts need module maps; nothing to embed, all of it linked into the app)
+  use_frameworks! :linkage => :static
   pod 'FirebaseAnalytics', '$FIREBASE_IOS'
   pod 'FirebaseCrashlytics', '$FIREBASE_IOS'
 end

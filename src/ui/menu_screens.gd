@@ -863,7 +863,7 @@ class OnlineScreen extends Screen:
 	func _stand_in() -> void:
 		_searching = false
 		Analytics.matchmaking_result("matched", "bot")
-		Net.api("leave", Net.creds(), "poll")
+		Net.api("leave", Net.creds().merged({"why": "standin"}), "poll")   # (the server records why)
 		_begin_ready(null, FillIn.make(Net.username(), Game.level()))
 
 	## An opponent was found (a player: `m`; a stand-in: `fill`): the ready-up.
@@ -1002,7 +1002,7 @@ class OnlineScreen extends Screen:
 		_find.text = "Find a match"
 		_say("Play 8-ball against another player.")
 		if Net.registered():
-			Net.api("leave", Net.creds())
+			Net.api("leave", Net.creds().merged({"why": "cancel"}))
 
 	func _exit_tree() -> void:
 		if _readying:
@@ -1017,7 +1017,7 @@ class OnlineScreen extends Screen:
 			Analytics.matchmaking_result("cancelled")
 			_searching = false
 			if Net.registered():
-				Net.api("leave", Net.creds())
+				Net.api("leave", Net.creds().merged({"why": "cancel"}))
 
 
 ## ------------------------------------------------------------ how to play

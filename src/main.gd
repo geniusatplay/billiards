@@ -2414,7 +2414,7 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device", "autosign", "assets", "combos", "analytics"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device", "autosign", "assets", "combos", "analytics", "lang_consent"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
@@ -4388,6 +4388,48 @@ func _tour_step(dir: String, s: String) -> void:
 			_stack.clear()
 			go("menu")
 			print("LANGLEAVE %s: %d problems in %d languages" % ["PASS" if problems == 0 else "FAIL", problems, langs.size()])
+		"lang_consent":
+			# 27 Nov 2026: the analytics question (asked at the first launch in the EEA / UK / Switzerland) and Settings ->
+			# "Share usage and crash data" in every language. --langs=de,ta to choose; pictures for en, de, ta, ar
+			# (--allshots for all).
+			var langs := Loc.codes()
+			var all_shots := OS.get_cmdline_user_args().has("--allshots")
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--langs="):
+					langs = Array(arg.substr(8).split(","))
+			var problems := 0
+			var keep_consent: String = str(Game.get_s("analytics_consent"))
+			_end_match()
+			for code in langs:
+				Loc.set_language(code)
+				_stack.clear()
+				go("menu")
+				await _wait(0.4)
+				open_consent()
+				await _wait(0.6)
+				var cp: Control = overlay_host.get_node_or_null("ConsentPopup")
+				if cp == null:
+					problems += 1
+					print("  NO CONSENT POPUP [%s]" % code)
+				else:
+					problems += _audit_text(code, "consent", cp)
+					if all_shots or code in ["en", "de", "ta", "ar"]:
+						await _shot(dir, "consent_%s" % code)
+					cp.queue_free()
+					await _wait(0.1)
+				go("settings")
+				await _wait(0.5)
+				var sw: Control = _screen.find_child("ShareData", true, false)
+				if sw == null:
+					problems += 1
+					print("  NO SHARE SWITCH [%s]" % code)
+				else:
+					problems += _audit_text(code, "settings_share", _screen)
+			Loc.set_language("en")
+			Game.set_s("analytics_consent", keep_consent)
+			_stack.clear()
+			go("menu")
+			print("LANGCONSENT %s: %d problems in %d languages" % ["PASS" if problems == 0 else "FAIL", problems, langs.size()])
 		"lang_name":
 			# the new name (Randy, 22 Nov: "Emerald Online 8 Ball Pool AR", "Emerald 8 Ball Pool" under the icon; "make
 			# sure to update the languages too") in every language: the menu's title, the share popup, "Update needed",
