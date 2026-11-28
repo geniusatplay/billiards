@@ -174,3 +174,60 @@ class SharePopup extends Control:
 		Sfx.ui("back")
 		closed.emit()
 		queue_free()
+
+
+## The first-launch question about analytics and crash reports (27 Nov 2026), shown where the law asks for consent
+## first (Analytics.consent_region: the EEA, the UK, Switzerland, or a phone that names no region). Both answers are the
+## same size and look: neither is pushed. Settings → "Share usage and crash data" changes it later.
+class ConsentPopup extends Control:
+	var router: Node
+
+	func _init(p_router: Node) -> void:
+		router = p_router
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		process_mode = Node.PROCESS_MODE_ALWAYS
+		name = "ConsentPopup"
+
+	func _ready() -> void:
+		var bg := ColorRect.new()
+		bg.color = Color(0.02, 0.04, 0.07, 0.78)
+		bg.mouse_filter = Control.MOUSE_FILTER_STOP
+		UIKit.fullrect(bg)
+		add_child(bg)
+		var card := UIKit.panel("Card")
+		card.custom_minimum_size = Vector2(900, 0)
+		card.add_theme_stylebox_override("panel", UIKit.box(Color(0.08, 0.13, 0.21, 0.98), 30, 3, Color(UIKit.EMERALD, 0.6), Vector4(40, 32, 40, 30), 24))
+		UIKit.center_in(self, card)
+		var v := UIKit.vbox(18)
+		card.add_child(v)
+		var title := UIKit.label("Help improve the game", "H1Label", HORIZONTAL_ALIGNMENT_CENTER)
+		title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		title.custom_minimum_size.x = 820
+		v.add_child(title)
+		var body := UIKit.label("May we collect usage data (how the game is played, never your name or contact details) and crash reports? It helps us fix problems and make the game better. Nothing is collected unless you allow it, and you can change this any time in Settings.", "MutedLabel", HORIZONTAL_ALIGNMENT_CENTER)
+		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.custom_minimum_size.x = 820
+		body.name = "ConsentText"
+		v.add_child(body)
+		var row := UIKit.hbox(22)
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		var no := UIKit.button("Don't allow", "", "", 330)
+		no.name = "ConsentNo"
+		no.pressed.connect(_answer.bind(false))
+		row.add_child(no)
+		var yes := UIKit.button("Allow", "", "", 330)
+		yes.name = "ConsentYes"
+		yes.pressed.connect(_answer.bind(true))
+		row.add_child(yes)
+		v.add_child(row)
+		var pp := UIKit.button("Privacy policy", "GhostButton", "lock")
+		pp.name = "ConsentPrivacy"
+		pp.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		pp.pressed.connect(func(): OS.shell_open(Net.PRIVACY_URL))
+		v.add_child(pp)
+		UIKit.fade_in(card, 0.25, 26)
+
+	func _answer(yes: bool) -> void:
+		Sfx.ui("tap")
+		Analytics.set_consent(yes)
+		queue_free()

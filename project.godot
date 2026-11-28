@@ -24,6 +24,7 @@ Loc="*res://src/autoload/loc.gd"
 Sfx="*res://src/autoload/sfx.gd"
 Ads="*res://src/autoload/ads.gd"
 Net="*res://src/autoload/net.gd"
+Analytics="*res://src/autoload/analytics.gd"
 
 [display]
 

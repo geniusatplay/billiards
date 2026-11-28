@@ -23,6 +23,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <simd/simd.h>
+#import <objc/message.h>
 
 #include <sys/utsname.h>
 #include <cfloat>
@@ -930,6 +931,79 @@ void EmeraldAR::platformCancel() {
 	[ear_game_center() cancel];
 }
 
+// ---- 27 Nov 2026: Firebase Analytics + Crashlytics, for the game's Analytics autoload. The Firebase SDK is linked into
+// the app by ios_plugin/ci.sh (CocoaPods) with GoogleService-Info.plist; this library only finds it by name at run time
+// (NSClassFromString), so it builds without Firebase's headers and an app without Firebase just says "not available".
+// Collection starts OFF (Info.plist keys from make_preset.py); analyticsSetEnabled follows the player's choice. Consent:
+// analytics storage as chosen, advertising storage / user data / personalisation always denied. No IDFA, no tracking.
+static id ear_fb_analytics() { return NSClassFromString(@"FIRAnalytics"); }
+
+static bool ear_fb_ready() {
+	Class app = NSClassFromString(@"FIRApp");
+	if (app == nil || ear_fb_analytics() == nil) {
+		return false;
+	}
+	if ([NSBundle.mainBundle pathForResource:@"GoogleService-Info" ofType:@"plist"] == nil) {
+		return false;
+	}
+	if ([app performSelector:@selector(defaultApp)] == nil) {
+		@try {
+			[app performSelector:@selector(configure)];
+		} @catch (NSException *e) {
+			NSLog(@"[EmeraldAR] Firebase configure failed: %@", e);
+			return false;
+		}
+	}
+	return true;
+}
+
+static id ear_fb_crashlytics() {
+	Class c = NSClassFromString(@"FIRCrashlytics");
+	return c ? [c performSelector:@selector(crashlytics)] : nil;
+}
+
+bool EmeraldAR::analyticsAvailable() {
+	return ear_fb_ready();
+}
+
+void EmeraldAR::analyticsSetEnabled(bool p_on) {
+	if (!ear_fb_ready()) {
+		return;
+	}
+	id fa = ear_fb_analytics();
+	NSDictionary *consent = @{@"analytics_storage": p_on ? @"granted" : @"denied", @"ad_storage": @"denied",
+		@"ad_user_data": @"denied", @"ad_personalization": @"denied"};
+	if ([fa respondsToSelector:@selector(setConsent:)]) {
+		[fa performSelector:@selector(setConsent:) withObject:consent];
+	}
+	((void (*)(id, SEL, BOOL))objc_msgSend)(fa, @selector(setAnalyticsCollectionEnabled:), p_on ? YES : NO);
+	id cr = ear_fb_crashlytics();
+	if (cr && [cr respondsToSelector:@selector(setCrashlyticsCollectionEnabled:)]) {
+		((void (*)(id, SEL, BOOL))objc_msgSend)(cr, @selector(setCrashlyticsCollectionEnabled:), p_on ? YES : NO);
+	}
+	NSLog(@"[EmeraldAR] Firebase collection %@", p_on ? @"on" : @"off");
+}
+
+void EmeraldAR::analyticsLog(const String &p_name, const String &p_json) {
+	if (!ear_fb_ready()) {
+		return;
+	}
+	NSString *name = [NSString stringWithUTF8String:p_name.utf8().get_data()];
+	NSData *data = [NSData dataWithBytes:p_json.utf8().get_data() length:p_json.utf8().length()];
+	NSDictionary *params = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+	if (![params isKindOfClass:[NSDictionary class]]) {
+		params = @{};
+	}
+	[ear_fb_analytics() performSelector:@selector(logEventWithName:parameters:) withObject:name withObject:params];
+}
+
+void EmeraldAR::crashlyticsLog(const String &p_text) {
+	id cr = ear_fb_crashlytics();
+	if (cr && [cr respondsToSelector:@selector(log:)]) {
+		[cr performSelector:@selector(log:) withObject:[NSString stringWithUTF8String:p_text.utf8().get_data()]];
+	}
+}
+
 String EmeraldAR::getLastError() {
 	return ear_str([EAR_HOST lastError]);
 }
@@ -988,6 +1062,10 @@ void EmeraldAR::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("platformSignIn", "server_client_id", "interactive"), &EmeraldAR::platformSignIn);
 	ClassDB::bind_method(D_METHOD("platformState"), &EmeraldAR::platformState);
 	ClassDB::bind_method(D_METHOD("platformCancel"), &EmeraldAR::platformCancel);
+	ClassDB::bind_method(D_METHOD("analyticsAvailable"), &EmeraldAR::analyticsAvailable);
+	ClassDB::bind_method(D_METHOD("analyticsSetEnabled", "on"), &EmeraldAR::analyticsSetEnabled);
+	ClassDB::bind_method(D_METHOD("analyticsLog", "name", "json"), &EmeraldAR::analyticsLog);
+	ClassDB::bind_method(D_METHOD("crashlyticsLog", "text"), &EmeraldAR::crashlyticsLog);
 	ClassDB::bind_method(D_METHOD("getLastError"), &EmeraldAR::getLastError);
 	ClassDB::bind_method(D_METHOD("getInfo"), &EmeraldAR::getInfo);
 	ClassDB::bind_method(D_METHOD("start", "w", "h"), &EmeraldAR::start);

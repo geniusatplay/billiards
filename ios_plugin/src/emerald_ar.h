@@ -41,6 +41,11 @@ public:
 	bool platformSignIn(const String &p_server_client_id, bool p_interactive);
 	String platformState();
 	void platformCancel();
+	// 27 Nov 2026: Firebase Analytics + Crashlytics (linked into the app by ci.sh's CocoaPods step; reached by name)
+	bool analyticsAvailable();
+	void analyticsSetEnabled(bool p_on);
+	void analyticsLog(const String &p_name, const String &p_json);
+	void crashlyticsLog(const String &p_text);
 	String getLastError();
 	String getInfo();
 	bool start(int p_w, int p_h);

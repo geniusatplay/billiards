@@ -4,7 +4,9 @@
 #
 #   ios_plugin/ci.sh plugin   build the ARKit plugin (godot-cpp 4.5 + src/emerald_ar.mm) into addons/emeraldar/
 #   ios_plugin/ci.sh godot    fetch Godot 4.7.2 for macOS and its iOS export template (kept in ~/godot)
-#   ios_plugin/ci.sh export   export the game as an Xcode project (build/ios/EmeraldBreak.xcodeproj)
+#   ios_plugin/ci.sh export   export the game as an Xcode project (build/ios/EmeraldBreak.xcodeproj), with Firebase
+#                             Analytics + Crashlytics added through CocoaPods when firebase/GoogleService-Info.plist is
+#                             there (27 Nov 2026): the build then goes through EmeraldBreak.xcworkspace
 #   ios_plugin/ci.sh ipa      build it, unsigned, into build/ios/EmeraldBreak-<version>.ipa (for Sideloadly)
 #   ios_plugin/ci.sh sim      run it on an iPhone simulator with a Dynamic Island: the game's "ios_check" test
 #                             (plugin loaded, safe area, AR start-up) -> build/ios/sim/ (pictures + log)
@@ -20,6 +22,7 @@ GODOT_VERSION="${GODOT_VERSION:-4.7.2}"
 GODOT_DIR="${GODOT_DIR:-$HOME/godot}"
 GODOT_BIN="$GODOT_DIR/Godot.app/Contents/MacOS/Godot"
 MIN_IOS="15.0"
+FIREBASE_IOS="${FIREBASE_IOS:-~> 11.15}"     # (the iOS SDK of mid-2025, the same generation as Android's BoM 33.16.0)
 VERSION="$(sed -n 's/^config\/version="\(.*\)"$/\1/p' "$ROOT/project.godot")"
 
 say() { echo ""; echo "=== $*"; }
@@ -92,13 +95,56 @@ step_export() {
 	test -d build/ios/EmeraldBreak.xcodeproj
 	echo "linked static libraries:"
 	grep -o 'lib[a-z_-]*\.ios\.[a-z_]*\.xcframework' build/ios/EmeraldBreak.xcodeproj/project.pbxproj | sort -u
+	step_firebase
+}
+
+# Firebase Analytics + Crashlytics (27 Nov 2026): CocoaPods links the SDK into the exported project; the plugin reaches it
+# by name (emerald_ar.mm). Without firebase/GoogleService-Info.plist the app is built as before, without Firebase.
+step_firebase() {
+	cd "$ROOT/build/ios"
+	local plist="$ROOT/firebase/GoogleService-Info.plist"
+	if [ ! -f "$plist" ]; then
+		echo "no firebase/GoogleService-Info.plist: the app is built without Firebase"
+		return 0
+	fi
+	say "adding Firebase Analytics + Crashlytics ($FIREBASE_IOS) with CocoaPods"
+	command -v pod >/dev/null || sudo gem install cocoapods
+	cp "$plist" GoogleService-Info.plist
+	cat > Podfile <<PODS
+platform :ios, '$MIN_IOS'
+install! 'cocoapods', :warn_for_unused_master_specs_repo => false
+target 'EmeraldBreak' do
+  pod 'FirebaseAnalytics', '$FIREBASE_IOS'
+  pod 'FirebaseCrashlytics', '$FIREBASE_IOS'
+end
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |c|
+      c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '$MIN_IOS'
+    end
+  end
+end
+PODS
+	ruby "$ROOT/ios_plugin/firebase_xcode.rb" EmeraldBreak.xcodeproj EmeraldBreak GoogleService-Info.plist
+	pod install --repo-update 2>&1 | tail -n 25
+	test -d EmeraldBreak.xcworkspace
+	grep -A3 "FirebaseAnalytics" Podfile.lock | head -n 4
+}
+
+# The project or (with Firebase) the workspace CocoaPods made, for xcodebuild.
+xc_input() {
+	if [ -d EmeraldBreak.xcworkspace ]; then
+		echo "-workspace EmeraldBreak.xcworkspace"
+	else
+		echo "-project EmeraldBreak.xcodeproj"
+	fi
 }
 
 step_ipa() {
 	cd "$ROOT/build/ios"
 	say "building the app with Xcode (unsigned)"
 	set +e
-	xcodebuild -project EmeraldBreak.xcodeproj -scheme EmeraldBreak -configuration Release -sdk iphoneos \
+	xcodebuild $(xc_input) -scheme EmeraldBreak -configuration Release -sdk iphoneos \
 		-destination "generic/platform=iOS" -archivePath EmeraldBreak.xcarchive \
 		CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
 		archive > xcodebuild.log 2>&1
@@ -117,6 +163,12 @@ step_ipa() {
 	[ -d "$app/zh_TW.lproj" ] && cp -R "$app/zh_TW.lproj" "$app/zh-Hant.lproj"
 	say "checks"
 	otool -L "$app/EmeraldBreak" | grep -E "ARKit|AVFoundation|CoreVideo" || { echo "ARKit is not linked into the app"; exit 1; }
+	if [ -d EmeraldBreak.xcworkspace ]; then
+		test -f "$app/GoogleService-Info.plist" || { echo "GoogleService-Info.plist is not in the app"; exit 1; }
+		nm "$app/EmeraldBreak" 2>/dev/null | grep -q "_OBJC_CLASS_\$_FIRApp" || { echo "Firebase (FIRApp) is not linked into the app"; exit 1; }
+		echo "Firebase: linked, GoogleService-Info.plist bundled, collection off until the player's choice:"
+		plutil -extract FIREBASE_ANALYTICS_COLLECTION_ENABLED raw "$app/Info.plist" || true
+	fi
 	plutil -extract NSCameraUsageDescription raw "$app/Info.plist"
 	plutil -extract CFBundleShortVersionString raw "$app/Info.plist"
 	ls "$app" | grep lproj | tr '\n' ' '; echo
@@ -150,7 +202,7 @@ step_sim() {
 	lipo -archs EmeraldBreak.xcframework/*simulator*/libgodot.a 2>/dev/null | grep -q arm64 && sim_arch=arm64
 	say "building for the iOS simulator ($sim_arch)"
 	set +e
-	xcodebuild -project EmeraldBreak.xcodeproj -scheme EmeraldBreak -configuration Release -sdk iphonesimulator \
+	xcodebuild $(xc_input) -scheme EmeraldBreak -configuration Release -sdk iphonesimulator \
 		-destination "generic/platform=iOS Simulator" -derivedDataPath sim_dd ARCHS="$sim_arch" ONLY_ACTIVE_ARCH=NO \
 		CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build > sim/xcodebuild_sim.log 2>&1
 	local rc=$?

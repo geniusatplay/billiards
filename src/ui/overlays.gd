@@ -563,6 +563,7 @@ class PlayerCard extends Control:
 
 	func _report(reason: String) -> void:
 		Sfx.ui("tap")
+		Analytics.log_event("player_reported", {"reason": reason, "opponent": "human" if _id != "" else "bot"})
 		if _id != "":
 			Net.report_player(_id, reason)
 		_note.text = L.t("Thanks for the report. We'll look into it.")
@@ -571,6 +572,7 @@ class PlayerCard extends Control:
 	func _toggle_block() -> void:
 		Sfx.ui("toggle")
 		var on := not _blocked()
+		Analytics.log_event("player_blocked" if on else "player_unblocked", {"opponent": "human" if _id != "" else "bot"})
 		if _id != "":
 			Net.block_player(_id, _name, on)
 		else:

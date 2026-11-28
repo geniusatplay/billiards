@@ -714,6 +714,7 @@ func _done() -> void:
 # ------------------------------------------------------------------------------------------------ the end
 func _complete() -> void:
 	var first := Game.finish_tutorial()
+	Analytics.log_event("tutorial_complete", {"version": version, "first": first})
 	# the match is over: no aiming (the stick would lie across the table under the end screen)
 	game.call("_set_state", PoolGame.State.OVER)
 	game.cue_view.visible = false
@@ -780,6 +781,7 @@ func _complete() -> void:
 
 ## Skip (and the pause menu's Quit): back to the menu; the tutorial stays to be played.
 func skip() -> void:
+	Analytics.log_event("tutorial_skip", {"version": version, "step": step})
 	finished.emit(false)
 	main.call("quit_to", "menu")
 

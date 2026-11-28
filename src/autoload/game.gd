@@ -69,6 +69,8 @@ const DEFAULTS := {
 	# v1.1.15: when the share popup was last shown (unix seconds); the tutorial was started by itself once
 	"share_last": 0, "tutorial_offered": false, "last_match_day": "",
 	"onboarded": {}, "first_run": true,
+	# 27 Nov 2026: the player's answer about analytics and crash reports ("" not asked yet, "yes", "no"; Analytics)
+	"analytics_consent": "",
 }
 
 ## v1.1.15 "World": how the table appears this launch (never saved: after a restart the main menu offers

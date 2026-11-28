@@ -84,6 +84,11 @@ var undo_sim: PoolSim = null
 var potted_this_shot: Array = []
 var jumped_this_shot: Array = []   # ball numbers that left the table this shot
 var shots_total := 0
+## (27 Nov 2026, analytics) balls potted and fouls per seat this match, and why it ended ("eight_ball", "opponent_left",
+## "connection_lost", "timeout")
+var stat_pots := [0, 0]
+var stat_fouls := [0, 0]
+var end_why := ""
 var _rack_shots0 := 0         # Practice: shots_total when this rack started
 var _rack_t0 := 0.0           # Practice: when this rack started (seconds of play)
 var placing_cue := false
@@ -662,6 +667,8 @@ func _consume_events() -> void:
 				_pocket_sound(pk["hole"], float(e["speed"]))
 				Game.vibrate(25)
 				potted_this_shot.append({"number": sim.num[i], "pocket": e["pocket"], "index": i})
+				if sim.num[i] != 0:
+					stat_pots[current] += 1
 				_spark(pk["hole"], sim.num[i] == 0)
 				ball_potted.emit(sim.num[i], current)
 	sim.events.clear()
@@ -937,6 +944,8 @@ func _resolve_versus() -> void:
 		_resync_views()
 	elif online:
 		net.send("result", NetMatch.pack_result(sim, rules, clocks, r, shots_total, _rest_sum))
+	if r["foul"]:
+		stat_fouls[shooter] += 1
 	if r["game_over"]:
 		_finish(rules.winner, rules.win_reason)
 		return
@@ -963,7 +972,9 @@ func _finish(winner: int, reason: String, forfeit := false) -> void:
 	Game.vibrate(60)
 	var info := {"mode": "versus", "winner": winner, "winner_name": player_names[winner],
 		"reason": reason, "shots": shots_total, "vs_ai": vs_ai and fill_in.is_empty(), "ai_level": ai_level, "online": looks_online(), "seat": local_seat(),
-		"opp_name": player_names[1 - local_seat()]}
+		"opp_name": player_names[1 - local_seat()],
+		"pots": stat_pots[local_seat()], "opp_pots": stat_pots[1 - local_seat()], "fouls": stat_fouls[local_seat()],
+		"why": "opponent_left" if forfeit else ("connection_lost" if reason == "The connection was lost" else (end_why if end_why != "" else "eight_ball"))}
 	if xp_track:
 		xp_track.won = winner == local_seat()
 		xp_track.match_shots = shots_total
@@ -984,6 +995,7 @@ func _on_timeout() -> void:
 	rules.timeout(current)
 	if online:
 		net.send("over", {"winner": rules.winner, "why": "time"})
+	end_why = "timeout"
 	_finish(rules.winner, L.t("%s ran out of time") % player_names[current])
 
 
@@ -1158,6 +1170,9 @@ func _net_tick(_delta: float) -> void:
 				var reason := "Your opponent left the match" if w == net_seat else "The connection was lost"
 				if why == "time":
 					reason = L.t("%s ran out of time") % player_names[1 - w]
+					end_why = "timeout"
+				elif w != net_seat:
+					Analytics.connection_lost("match", net.host)    # (the other phone saw this one go quiet)
 				_finish(w, reason, w == net_seat and why != "time")
 			"cancel":
 				# they left the ready-up (24 Nov 2026) just as this phone started the match: if nobody has played a
@@ -1215,6 +1230,7 @@ func _net_tick(_delta: float) -> void:
 		net.send("over", {"winner": net_seat, "why": "away"})
 		_finish(net_seat, "Your opponent left the match", true)
 	elif net.silent > 45.0:
+		Analytics.connection_lost("match", net.host)
 		rules.winner = 1 - net_seat
 		_finish(1 - net_seat, "The connection was lost")
 

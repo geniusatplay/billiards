@@ -670,6 +670,10 @@ func _block_ar(code: String) -> void:
 	arcore.stop()
 	ar_state = ArState.BLOCKED
 	ar_block = code
+	if code == "permission":
+		Analytics.camera_permission(false)
+	Analytics.ar_mode_set(false, {"permission": "camera_denied", "unsupported": "device_unsupported", "none": "device_unsupported",
+		"not_installed": "ar_services_missing", "too_old": "ar_services_missing", "sdk_old": "ar_services_missing"}.get(code, "start_failed"))
 	_ar_detail = "%s%s" % [(err + " · ") if err != "" else "", info]
 	print("[ar] can't start (%s): %s" % [code, _ar_detail])
 
@@ -738,6 +742,9 @@ func _ar_step(delta: float) -> void:
 			if arcore.status == 1:
 				ar_state = ArState.RUNNING
 				print("[ar] walk-around AR running: ", arcore.info())
+				Analytics.camera_permission(true)
+				if not placed:
+					Analytics.ar_placing()
 			elif arcore.status == -1:
 				_ar_tries += 1
 				var code := _classify(arcore.last_error())
@@ -1271,6 +1278,7 @@ func _plane_hit(sp: Vector2, y: float) -> Variant:
 func place_table() -> void:
 	ar_lift = 0.0
 	placed = true
+	Analytics.ar_placement(true, str(Game.get_s("surface")))
 	_reanchor()
 	table_root.visible = true
 	_reticle.visible = false
@@ -1286,6 +1294,7 @@ func unplace_table() -> void:
 		return
 	if mode == Mode.WORLD_AR:
 		arcore.clear_anchor()
+		Analytics.ar_placing()      # (put down again: timed from here)
 	placed = false
 	placement_changed.emit(false)
 	_update_ar_scene()   # back to the camera picture while the table is put down again

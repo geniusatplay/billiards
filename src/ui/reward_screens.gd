@@ -289,6 +289,8 @@ class PackageScreen extends MenuScreens.Screen:
 			_all_btn.text = L.t("Open all (%d)") % ready
 		else:
 			_wait.text = L.t("Unlocks by itself in %s") % XP.clock(left)
+			if Ads.active() and not _ad_btn.visible:
+				Analytics.log_event("rewarded_offered", {"placement": "package"})
 			_ad_btn.visible = Ads.active()
 
 	func _open(all: bool, by_ad: bool) -> void:
@@ -441,6 +443,8 @@ class ChestScreen extends MenuScreens.Screen:
 				# the reward is named on the button itself (AdMob: clear disclosure before the advert)
 				var after := maxi(0, int(Game.progress.get("chest_from", 0)) + XP.CHEST_WAIT_AD - Game.now())
 				_ad_btn.text = L.t("Watch an ad to open it now") if after == 0 else L.t("Open 4 Hours Faster With Ad")
+				if not _ad_btn.visible:
+					Analytics.log_event("rewarded_offered", {"placement": "xp_chest"})
 				_ad_btn.visible = true
 		_note.text = L.t("A new XP chest every 6 hours, or every 2 hours with an ad.") if Ads.active() else L.t("A new XP chest every 6 hours.")
 

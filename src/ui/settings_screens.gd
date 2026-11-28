@@ -347,6 +347,16 @@ class SettingsScreen extends MenuScreens.Screen:
 			dbg.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			dbg.pressed.connect(func(): router.call("open_debug"))
 			dv.add_child(dbg)
+		# 27 Nov 2026: analytics and crash reports on or off (Analytics; asked at the first launch where the law says so)
+		var share_data := CheckButton.new()
+		share_data.text = "Share usage and crash data"
+		share_data.name = "ShareData"
+		share_data.button_pressed = Analytics.collecting()
+		share_data.focus_mode = Control.FOCUS_NONE
+		share_data.toggled.connect(func(on: bool):
+			Sfx.ui("toggle")
+			Analytics.set_consent(on))
+		body.add_child(share_data)
 		# v1.1.15: the privacy policy (both stores ask for it inside the app too)
 		var pp := UIKit.button("Privacy policy", "GhostButton", "lock")
 		pp.name = "PrivacyPolicy"

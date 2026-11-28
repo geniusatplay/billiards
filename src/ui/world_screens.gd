@@ -266,6 +266,7 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 	## "Place in front of me": the camera comes on and the placing panel takes over the screen.
 	func _choose_ar() -> void:
 		var st: Stage = router.get("stage")
+		Analytics.ar_mode_set(true, "player_choice")
 		Game.set_s("ar_mode", "auto")
 		_cards.visible = false
 		_placing.visible = true
@@ -291,6 +292,7 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 	## Back from placing: the cards again, and no table in the room (the menus show Play in place meanwhile).
 	func _stop_placing() -> void:
 		var st: Stage = router.get("stage")
+		Analytics.ar_placement(false, "back")
 		if st.placement_changed.is_connected(_on_placed):
 			st.placement_changed.disconnect(_on_placed)
 		if _was == "ar":
@@ -303,6 +305,7 @@ class PlaceWorldScreen extends MenuScreens.Screen:
 	## "Play in place": no camera, the table in the chosen world background.
 	func _choose_studio() -> void:
 		var st: Stage = router.get("stage")
+		Analytics.ar_mode_set(false, "player_choice")
 		if st.placement_changed.is_connected(_on_placed):
 			st.placement_changed.disconnect(_on_placed)
 		Game.set_s("ar_mode", "studio")

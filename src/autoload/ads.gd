@@ -49,6 +49,18 @@ func show(moment: String, done: Callable, skipped := Callable()) -> void:
 	if not active():
 		done.call()
 		return
+	if moment in REWARDED:
+		# (analytics, 27 Nov 2026: whether players finish the rewarded adverts; "sample" = a stand-in, not a real advert)
+		var real := ENABLED
+		var d0 := done
+		var s0 := skipped
+		done = func():
+			Analytics.log_event("rewarded_completed", {"placement": moment, "sample": not real})
+			d0.call()
+		skipped = func():
+			Analytics.log_event("rewarded_skipped", {"placement": moment, "sample": not real})
+			if s0.is_valid():
+				s0.call()
 	if ENABLED and _show_real(moment, done, skipped):
 		return
 	_stand_in(moment, done, skipped)

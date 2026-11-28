@@ -815,6 +815,7 @@ class OnlineScreen extends Screen:
 			return
 		if ping >= 9999:
 			return _failed()
+		Analytics.matchmaking_start("online")
 		if not resume:
 			_t0 = Time.get_ticks_msec()
 			# 45-60 s, never the same: a stand-in found at the same moment every time would give it away
@@ -842,6 +843,7 @@ class OnlineScreen extends Screen:
 			if r.has("match"):
 				var m := NetMatch.from_reply(r)
 				Net.add_child(m)
+				Analytics.matchmaking_result("matched", "human")
 				_begin_ready(m, {})
 				return
 			var waited := (Time.get_ticks_msec() - _t0) / 1000.0
@@ -860,6 +862,7 @@ class OnlineScreen extends Screen:
 	## Nobody came: a match against a stand-in opponent, shown and paid like an online one (the ready-up too).
 	func _stand_in() -> void:
 		_searching = false
+		Analytics.matchmaking_result("matched", "bot")
 		Net.api("leave", Net.creds(), "poll")
 		_begin_ready(null, FillIn.make(Net.username(), Game.level()))
 
@@ -892,6 +895,7 @@ class OnlineScreen extends Screen:
 		_row.visible = false
 		_ready_ui.visible = true
 		Sfx.play("turn_chime", 0.9)
+		Analytics.lobby_joined("human" if m else "bot")
 		_show_ready()
 
 	func _press_ready() -> void:
@@ -950,6 +954,7 @@ class OnlineScreen extends Screen:
 		_show_ready()
 
 	func _go() -> void:
+		Analytics.lobby_left("ready" if _me_ready and _opp_ready else "auto_start")
 		_readying = false
 		var m := _m
 		_m = null
@@ -960,6 +965,7 @@ class OnlineScreen extends Screen:
 
 	## The other player left during the ready-up (or their phone went quiet): back to looking.
 	func _opp_left() -> void:
+		Analytics.lobby_left("opponent_left")
 		_readying = false
 		if is_instance_valid(_m):
 			_m.send("cancel", {})      # (a phone that only went quiet learns it when it comes back: no match there either)
@@ -977,6 +983,7 @@ class OnlineScreen extends Screen:
 
 	func _failed() -> void:
 		_searching = false
+		Analytics.matchmaking_result("error")
 		_note = ""
 		if _world_b:
 			_world_b.disabled = false
@@ -985,6 +992,8 @@ class OnlineScreen extends Screen:
 			_say("The game server cannot be reached. Check your internet connection and try again.")
 
 	func _cancel() -> void:
+		if _searching:
+			Analytics.matchmaking_result("cancelled")
 		_searching = false
 		_gen += 1
 		_note = ""
@@ -998,12 +1007,14 @@ class OnlineScreen extends Screen:
 	func _exit_tree() -> void:
 		if _readying:
 			# left during the ready-up (Back): the other phone goes back to looking
+			Analytics.lobby_left("quit")
 			_readying = false
 			if is_instance_valid(_m):
 				_m.send("cancel", {})
 				_m.close()
 			_m = null
 		if _searching:
+			Analytics.matchmaking_result("cancelled")
 			_searching = false
 			if Net.registered():
 				Net.api("leave", Net.creds())

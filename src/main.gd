@@ -311,6 +311,7 @@ func go(name: String, replace := false) -> void:
 	if _stack.is_empty() or _stack.back() != name:
 		_stack.append(name)
 	_show(name)
+	Analytics.log_event("screen_view", {"screen_name": name, "screen_class": "menu"})
 
 
 func back() -> void:
@@ -471,8 +472,37 @@ func start_match(cfg: Dictionary) -> void:
 	hud_setup(cfg)
 	if cfg.has("tutorial"):
 		hud.add_child(Tutorial.new(self, int(cfg["tutorial"])))
+	_log_match_start(cfg)
 	if _tour_dir != "" and _tour_autoplace:
 		_tour_place_first.call_deferred(game)
+
+
+## Analytics (27 Nov 2026): what kind of match starts. mode: "solo" (CPU), "online" (a player, or the stand-in: opponent
+## "bot"), "local" (pass and play), "practice"; the tutorial is its own event.
+func _log_match_start(cfg: Dictionary) -> void:
+	if game == null:
+		return
+	if cfg.has("tutorial"):
+		Analytics.log_event("tutorial_begin", {"version": int(cfg["tutorial"])})
+		return
+	var m := match_kind()
+	var extra := {"level": Game.level()}
+	if m[1] == "cpu":
+		extra["ai_level"] = game.ai_level
+	Analytics.match_start(m[0], stage.mode != Stage.Mode.STUDIO, m[1], extra)
+
+
+## [mode, opponent] of the match being played, as analytics names them.
+func match_kind() -> Array:
+	if game == null or game.mode != "versus":
+		return ["practice", "none"]
+	if game.online:
+		return ["online", "human"]
+	if not game.fill_in.is_empty():
+		return ["online", "bot"]
+	if game.vs_ai:
+		return ["solo", "cpu"]
+	return ["local", "local"]
 
 
 ## Tours: Play in place starts the break by placing the cue ball (22 Nov). Steps about other things go on as a
@@ -567,11 +597,13 @@ func after_results(action: String) -> void:
 	var carry_on := func():
 		match action:
 			"restart":
+				Analytics.log_event("rematch_accepted", {"mode": match_kind()[0]})
 				restart()
 			"rerack":
 				_close_overlays()
 				if game:
 					game.reset_rack()
+					Analytics.match_start("practice", stage.mode != Stage.Mode.STUDIO, "none", {"level": Game.level()})
 			"packages":
 				quit_to("menu")
 				go("packages")
@@ -598,6 +630,9 @@ func _on_match_void() -> void:
 
 
 func quit_to(where: String) -> void:
+	if game != null and game.state != PoolGame.State.OVER and Analytics.in_match():
+		var me := game.local_seat()
+		Analytics.match_quit({"balls_potted": game.stat_pots[me], "opp_potted": game.stat_pots[1 - me], "shots": game.shots_total})
 	_close_overlays()
 	get_tree().paused = false
 	_end_match()
@@ -651,6 +686,10 @@ func view_is_ar() -> bool:
 ## Pause menu -> View: walk-around AR ("auto") or the Studio view ("studio"), switched in the middle of the match.
 ## Going to AR closes the pause menu, because the room has to be seen to put the table down.
 func switch_view(to: String) -> void:
+	if str(Game.get_s("ar_mode")) != to:
+		Analytics.ar_mode_set(to != "studio", "player_choice")
+		if to == "studio" and stage.mode == Stage.Mode.WORLD_AR and not stage.placed:
+			Analytics.ar_placement(false, "switched_off")
 	Game.set_s("ar_mode", to)
 	if to == "studio":
 		Game.world_ready = "studio"     # (back to "ar" once the table is put down in the room again)
@@ -706,9 +745,18 @@ func pause_and_open(name: String) -> void:
 
 func _on_game_over(res: Dictionary) -> void:
 	_close_confirm()          # (the match is over: "Leave the match?" no longer applies)
+	var kind := match_kind()
+	var w := int(res.get("winner", 0))
+	var result := ("p1_win" if w == 0 else "p2_win") if kind[0] == "local" else ("win" if w == int(res.get("seat", 0)) else "loss")
+	Analytics.match_end(result, {"shots": int(res.get("shots", 0)), "balls_potted": int(res.get("pots", 0)),
+		"opp_potted": int(res.get("opp_pots", 0)), "fouls": int(res.get("fouls", 0)), "end": str(res.get("why", ""))})
+	if kind[0] in ["solo", "local"]:
+		Analytics.log_event("rematch_offered", {"mode": kind[0]})
 	if res.has("xp"):
 		# the XP is banked at once (so quitting during the score screen loses nothing); the screen animates it
 		res["gain"] = Game.add_xp(int(res["xp"]["total"]))
+		if int(res["gain"].get("to", 0)) > int(res["gain"].get("from", 0)):
+			Analytics.log_event("level_up", {"level": int(res["gain"]["to"])})
 	Game.count_match()
 	matches_this_launch += 1
 	# the between-matches advert plays as the player leaves the score screen (never at the start of a match)
@@ -724,6 +772,8 @@ func _on_game_over(res: Dictionary) -> void:
 ## Practice: the whole rack is down. Its own little score screen; the advert follows it like any score screen.
 func _on_rack_cleared(info: Dictionary) -> void:
 	_ad_due = true
+	if game:
+		Analytics.match_end("cleared", {"shots": int(info.get("shots", game.shots_total)), "balls_potted": game.stat_pots[0]})
 	await get_tree().create_timer(0.7).timeout
 	if game == null:
 		return
@@ -763,6 +813,18 @@ func share_due() -> bool:
 	return Game.now() - int(Game.get_s("share_last")) >= SHARE_EVERY
 
 
+## The analytics question (27 Nov 2026): on the main menu at the first launch, where consent is asked for first.
+func consent_due() -> bool:
+	return Analytics.needs_asking() and game == null and not _stack.is_empty() and _stack.back() == "menu" \
+		and not Net.update_needed and overlay_host.get_node_or_null("LanguagePicker") == null
+
+
+func open_consent() -> void:
+	if overlay_host.get_node_or_null("ConsentPopup"):
+		return
+	overlay_host.add_child(StoreScreens.ConsentPopup.new(self))
+
+
 func open_share() -> void:
 	if overlay_host.get_node_or_null("SharePopup"):
 		return
@@ -771,8 +833,16 @@ func open_share() -> void:
 
 
 func _process(_delta: float) -> void:
+	# (overlay_host only exists once the menu's UI is built, a few frames after the start: a call on it before then
+	# isn't caught in an exported game, it crashes the engine - 27 Nov 2026, the first Firebase test builds)
+	if overlay_host == null:
+		return
 	if Engine.get_process_frames() % 30 == 0 and _tour_dir == "":
-		if tutorial_due():
+		if overlay_host.get_node_or_null("ConsentPopup"):
+			return       # (the analytics question first: the tutorial and the share popup wait for the answer)
+		if consent_due():
+			open_consent()
+		elif tutorial_due():
 			Game.set_s("tutorial_offered", true)
 			play("tutorial")
 		elif share_due():
@@ -1219,25 +1289,7 @@ func _store_shots(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--shots="):
 			only = Array(a.substr(8).split(","))
-	var keep_prog: Dictionary = Game.progress.duplicate(true)
-	var keep_stats: Dictionary = Game.stats.duplicate(true)
-	var keep_gear := {}
-	for gk in Game.GEAR_KEYS.values():
-		keep_gear[gk] = Game.get_s(gk)
-	var keep_scheme: String = Game.get_s("control_scheme")
-	var owned: Array = []
-	for kind in Game.GEAR_KEYS.keys():
-		for e in Catalog.kind_list(kind):
-			owned.append(kind + ":" + str(e["id"]))
-	Game.progress = {"xp": XP.total_for(27) + 140, "owned": owned, "packages": [], "pk_time": {}, "chest_at": 0,
-		"chest_from": 0, "chest_cut": false, "matches": 64, "curve": 2, "tutorial": true}
-	Game.stats = {"shots": 1840, "pots": 690, "games": 64, "wins_vs_ai": [9, 14, 6], "games_vs_ai": [10, 21, 13]}
-	Game.pretend_store = true
-	Game.settings_changed.emit("fps_counter")
-	Game.set_s("ar_mode", "studio")
-	Game.set_s("control_scheme", "pro_dial")     # (the only cue control players have)
-	Game.set_s("surface", "floor")
-	Game.progress_changed.emit()
+	var keep := _store_begin()
 	# (26 Nov 2026, evening) Randy: "the images dont show the updated breaks". Racks a and b were made before the
 	# 17 Nov break fix. --laycands=yaw,yaw,... breaks the rack once per aim with today's physics and writes every
 	# result to <dir>/lay_cands.json (no pictures), so the best-spread tables can be picked into the --lays file.
@@ -1295,19 +1347,135 @@ func _store_shots(dir: String) -> void:
 		if not only.is_empty() and not (id in only):
 			continue
 		await _store_one(dir, id, lay_a, lay_b)
+	_store_end(keep)
+	print("STORE done")
+
+
+## The game as a store build shows it, with a player who owns every cue, table, ball set and scene (the store tours).
+## Returns what to put back afterwards (_store_end).
+func _store_begin() -> Dictionary:
+	var keep := {"prog": Game.progress.duplicate(true), "stats": Game.stats.duplicate(true), "gear": {},
+		"scheme": Game.get_s("control_scheme")}
+	for gk in Game.GEAR_KEYS.values():
+		keep["gear"][gk] = Game.get_s(gk)
+	var owned: Array = []
+	for kind in Game.GEAR_KEYS.keys():
+		for e in Catalog.kind_list(kind):
+			owned.append(kind + ":" + str(e["id"]))
+	Game.progress = {"xp": XP.total_for(27) + 140, "owned": owned, "packages": [], "pk_time": {}, "chest_at": 0,
+		"chest_from": 0, "chest_cut": false, "matches": 64, "curve": 2, "tutorial": true}
+	Game.stats = {"shots": 1840, "pots": 690, "games": 64, "wins_vs_ai": [9, 14, 6], "games_vs_ai": [10, 21, 13]}
+	Game.pretend_store = true
+	Game.settings_changed.emit("fps_counter")
+	Game.set_s("ar_mode", "studio")
+	Game.set_s("control_scheme", "pro_dial")     # (the only cue control players have)
+	Game.set_s("surface", "floor")
+	Game.progress_changed.emit()
+	return keep
+
+
+func _store_end(keep: Dictionary) -> void:
 	_end_match()
 	stage.reset_manual()
 	Game.pretend_store = false
-	Game.progress = keep_prog
-	Game.stats = keep_stats
-	for gk in keep_gear.keys():
-		Game.set_s(gk, keep_gear[gk])
-	Game.set_s("control_scheme", keep_scheme)
+	Game.progress = keep["prog"]
+	Game.stats = keep["stats"]
+	for gk in (keep["gear"] as Dictionary).keys():
+		Game.set_s(gk, keep["gear"][gk])
+	Game.set_s("control_scheme", keep["scheme"])
 	Game.set_s("ar_mode", "auto")
 	Game.progress_changed.emit()
 	_stack.clear()
 	go("menu")
-	print("STORE done")
+
+
+# ------------------------------------------------------------------ every table in every scene (27 Nov 2026)
+# Randy: "please create a nice way to re-create every scene there with each table and each background en bulk fast yet
+# perfect and give me a new screenshot lineup" (he chose: all 273, then pick). One run draws every table (21) in every
+# scene (13) the same way: the showcase look (a mid-game table from a real break with today's physics, the cue lined up
+# on a pot, no buttons), the camera where that scene looks best (COMBO_CAM). Scenes are the outer loop, so each scene's
+# shaders are compiled once.
+#   --only=combos [--scenes=a,b] [--tables=a,b] [--lays=<json>] [--lay=a|b|c|d] [--cue=<id>] [--balls=<id>]
+#   [--resume] (skip pictures already in the folder)   [--sweep] (each scene from 8 sides, first table only)
+# Files: combo_<scene>__<table>.png. Run at any size: 1280x720 for the gallery, the store sizes for the picks.
+const COMBO_CAM := {
+	# scene: [yaw, pitch°, distance m, look-at height m] (the showcase pictures' cameras; lounge, neon, sunset, skyline and
+	# synth chosen from --sweep on 27 Nov: synth looks down the table into its sun)
+	"lounge": [0.785, 18.0, 2.5, -0.1], "neon": [0.785, 18.0, 2.5, -0.1], "sunset": [0.785, 18.0, 2.5, -0.1],
+	"desert": [-0.785, 12.0, 2.7, -0.1], "grove": [0.785, 18.0, 2.5, -0.1], "aurora": [2.356, 18.0, 2.5, -0.1],
+	"reef": [0.785, 18.0, 2.5, -0.1], "skyline": [0.785, 18.0, 2.5, -0.1], "temple": [2.356, 18.0, 2.5, -0.1],
+	"cavern": [-2.356, 18.0, 2.5, -0.1], "forge": [1.571, 18.0, 2.5, -0.1], "synth": [-1.571, 18.0, 2.5, -0.1],
+	"orbit": [0.785, 18.0, 2.5, -0.1],
+}
+
+
+func _store_combos(dir: String) -> void:
+	var scenes: Array = []
+	var tables: Array = []
+	for e in Catalog.SCENES:
+		scenes.append(str(e["id"]))
+	for e in Catalog.TABLES:
+		tables.append(str(e["id"]))
+	var lay_key := "a"
+	var cue := "cue_emerald_classic"
+	var balls := "balls"
+	var lay_path := ""
+	var resume := false
+	var sweep := false
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--scenes="):
+			scenes = Array(a.substr(9).split(","))
+		elif a.begins_with("--tables="):
+			tables = Array(a.substr(9).split(","))
+		elif a.begins_with("--lay="):
+			lay_key = a.substr(6)
+		elif a.begins_with("--lays="):
+			lay_path = a.substr(7)
+		elif a.begins_with("--cue="):
+			cue = a.substr(6)
+		elif a.begins_with("--balls="):
+			balls = a.substr(8)
+		elif a == "--resume":
+			resume = true
+		elif a == "--sweep":
+			sweep = true
+	var keep := _store_begin()
+	var lay := {}
+	if lay_path != "" and FileAccess.file_exists(lay_path):
+		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(lay_path))
+		if saved is Dictionary and (saved as Dictionary).has(lay_key):
+			lay = _store_lay_from(saved[lay_key])
+	if lay.is_empty():
+		lay = await _store_break_layout(0.0)
+	var made := 0
+	var t_all := Time.get_ticks_msec()
+	for sc in scenes:
+		var cam: Array = COMBO_CAM.get(sc, [0.785, 18.0, 2.5, -0.1])
+		for tb in (tables.slice(0, 1) if sweep else tables):
+			var name := "combo_%s__%s" % [sc, tb]
+			if resume and FileAccess.file_exists(dir.path_join(name + ".png")):
+				continue
+			var t0 := Time.get_ticks_msec()
+			_store_gear(sc, tb, cue, balls)
+			await _store_versus(lay)
+			hud.visible = false
+			var yaws: Array = [float(cam[0])]
+			if sweep:
+				yaws = []
+				for k in 8:
+					yaws.append(-PI + k * PI / 4.0)
+			for y in yaws:
+				_store_cam(Vector3(0, float(cam[3]), 0), float(cam[2]), float(cam[1]), float(y))
+				await _wait(1.2 if sweep else 2.5)
+				stage.call("_snap_orbit")
+				await _wait(0.3)
+				await _shot(dir, ("sweep_%s_%+.2f" % [sc, y]) if sweep else name)
+			hud.visible = true
+			stage.reset_manual()
+			made += 1
+			print("COMBO %s %s %.1f s" % [sc, tb, (Time.get_ticks_msec() - t0) / 1000.0])
+	_store_end(keep)
+	print("COMBOS done: %d pictures in %.0f s" % [made, (Time.get_ticks_msec() - t_all) / 1000.0])
 
 
 func _store_gear(scene: String, table: String, cue: String, balls: String) -> void:
@@ -2246,11 +2414,11 @@ func _run_tour(dir: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--only="):
 			only = a.substr(7)
-	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device", "autosign", "assets"]
+	var steps := ["menu", "vs_ai", "pass_play", "controls", "settings", "help", "practice", "top", "aim", "pro_dial", "orbit_ring", "trackpad", "crank", "ghost_target", "thumbstick", "phone_cue", "jump", "world_ar", "match_vs", "debug", "results", "ar", "input", "ar_blocked", "safe_area", "ios_check", "account", "hand", "rail_cue", "sound", "adjust", "music", "rematch", "lang", "ballsets", "loading", "notices", "scenes", "breakpos", "wheelzone", "ar_scene", "cues", "tables", "icons", "rewards", "online", "standin", "world", "options", "share", "update", "tutorial", "tut_lang", "pausemenu", "chest", "cueballs", "drawer", "pockets", "cushions", "feed", "freelook", "lang_feed", "lang_ads", "packages", "perf", "store", "breakview", "pkbake", "startaim", "placeturn", "pkcorner", "adsample", "loadvideo", "lang_name", "inplace", "leave", "lang_leave", "readyup", "social", "lang_social", "social_native", "signin_device", "autosign", "assets", "combos", "analytics"]
 	for s in steps:
 		if only != "" and not (s in only.split(",")):
 			continue
-		if only == "" and s in ["perf", "ios_check", "store", "breakview", "pkbake", "signin_device", "assets"]:
+		if only == "" and s in ["perf", "ios_check", "store", "breakview", "pkbake", "signin_device", "assets", "combos"]:
 			continue     # (measuring only: --only=perf; ios_check runs on an iPhone / the iOS simulator; signin_device on a phone)
 		Game.world_ready = "studio" if s != "world" else ""   # (v1.1.15: the world is chosen; the "world" step tests choosing it)
 		# (the steps about placing the cue ball see Play in place's placing start for themselves)
@@ -2699,6 +2867,159 @@ func _tour_step(dir: String, s: String) -> void:
 				all_ok = all_ok and r[1]
 				print("  %s  %s" % ["ok  " if r[1] else "FAIL", r[0]])
 			print("STANDIN %s" % ("PASS" if all_ok else "FAIL"))
+		"analytics":
+			# 27 Nov 2026 (Randy: "prepare firebase & events like this"): the events the game logs (Analytics.recent),
+			# and the consent question where the law asks for one first (the phone's region; Analytics.test_region).
+			var res := []
+			var chk := func(what: String, good: bool, info := ""):
+				res.append([what + ("  " + info if info != "" else ""), good])
+			var ev := func(name: String) -> Dictionary:
+				var e: Array = Analytics.last(name)
+				return e[1] if not e.is_empty() else {}
+			var keep_consent: String = str(Game.get_s("analytics_consent"))
+			Game.set_s("ar_mode", "studio")
+			Game.world_ready = "studio"
+			# --- consent: an EEA phone that has not answered yet is asked on the main menu; nothing is sent meanwhile
+			Analytics.test_region = "DE"
+			Game.set_s("analytics_consent", "")
+			chk.call("a German phone: asked first, not collecting", Analytics.needs_asking() and not Analytics.collecting())
+			Analytics.log_event("test_before", {})
+			chk.call("an event before the answer is not sent", Analytics.last("test_before").size() == 3 and Analytics.last("test_before")[2] == false)
+			_stack.clear()
+			go("menu")
+			await _wait(0.5)
+			chk.call("the menu is the place to ask", consent_due())
+			open_consent()
+			await _wait(1.0)
+			var cp: Control = overlay_host.get_node_or_null("ConsentPopup")
+			chk.call("the question shows, two answers the same size", cp != null and cp.find_child("ConsentYes", true, false) != null
+				and (cp.find_child("ConsentYes", true, false) as Control).size == (cp.find_child("ConsentNo", true, false) as Control).size)
+			await _shot(dir, "analytics_1_consent")
+			if cp:
+				(cp.find_child("ConsentNo", true, false) as Button).pressed.emit()
+			await _wait(0.3)
+			chk.call("'Don't allow' -> not collecting, not asked again", not Analytics.collecting() and not Analytics.needs_asking() and str(Game.get_s("analytics_consent")) == "no")
+			Analytics.set_consent(true)
+			chk.call("the Settings switch turns it on", Analytics.collecting() and Analytics.count("analytics_consent") >= 1)
+			Analytics.test_region = "US"
+			Game.set_s("analytics_consent", "")
+			chk.call("a US phone: not asked, collecting until turned off", not Analytics.needs_asking() and Analytics.collecting())
+			# --- names are made Firebase-legal and every event says which game
+			Analytics.log_event("Bad Name-1!", {"Long Value": "x".repeat(150), "flag": true})
+			var bad: Array = Analytics.recent.back()
+			chk.call("names cleaned, values cut to 100, bools as 1/0, game = pool", bad[0] == "bad_name_1_" and str(bad[1]["long_value"]).length() == 100 and bad[1]["flag"] == 1 and bad[1]["game"] == "pool", str(bad[0]))
+			# --- practice: start, then leave
+			start_match({"mode": "practice"})
+			await _wait(1.0)
+			var ms: Dictionary = ev.call("match_start")
+			chk.call("practice: match_start mode practice, ar off, opponent none", ms.get("mode") == "practice" and ms.get("ar") == "off" and ms.get("opponent") == "none", str(ms))
+			quit_to("menu")
+			await _wait(0.4)
+			var mq: Dictionary = ev.call("match_quit")
+			var me: Dictionary = ev.call("match_end")
+			chk.call("leaving: match_quit + match_end abandoned", mq.get("mode") == "practice" and me.get("result") == "abandoned", str(me))
+			# --- against the CPU: a win, the score screen offers a rematch, the rematch starts a new match
+			start_match({"mode": "versus", "vs_ai": true, "ai_level": 1})
+			await _wait(1.0)
+			ms = ev.call("match_start")
+			chk.call("vs CPU: match_start mode solo, opponent cpu, ai_level", ms.get("mode") == "solo" and ms.get("opponent") == "cpu" and ms.get("ai_level") == 1, str(ms))
+			game.stat_pots[0] = 7
+			game.stat_fouls[0] = 1
+			game.shots_total = 19
+			game.rules.winner = 0
+			game.call("_finish", 0, "Sank the 8!")
+			await _wait(1.5)
+			me = ev.call("match_end")
+			chk.call("the win: match_end result win, shots, balls potted, fouls, end", me.get("result") == "win" and me.get("shots") == 19 and me.get("balls_potted") == 7 and me.get("fouls") == 1 and me.get("end") == "eight_ball", str(me))
+			chk.call("rematch_offered", ev.call("rematch_offered").get("mode") == "solo")
+			var n_start := Analytics.count("match_start")
+			after_results("restart")
+			await _wait(1.0)
+			chk.call("Rematch: rematch_accepted, a new match_start", ev.call("rematch_accepted").get("mode") == "solo" and Analytics.count("match_start") == n_start + 1)
+			quit_to("menu")
+			await _wait(0.4)
+			# --- the tutorial: begin, skip
+			start_match({"mode": "practice", "tutorial": TUTORIAL_VERSION})
+			await _wait(1.2)
+			chk.call("tutorial_begin with the version", ev.call("tutorial_begin").get("version") == TUTORIAL_VERSION)
+			var tut: Tutorial = hud.get_node_or_null("Tutorial") if hud else null
+			if tut:
+				tut.skip()
+			await _wait(0.5)
+			chk.call("Skip: tutorial_skip", ev.call("tutorial_skip").get("version") == TUTORIAL_VERSION)
+			# --- online, nobody there: the search, the stand-in ("bot"), the ready-up, the match
+			var srv = load("res://tests/fake_server.gd").new()
+			Net.fake = srv
+			var keep_pr: Dictionary = Game.progress.duplicate(true)
+			Game.progress = Game.fresh_progress()
+			await Net.sign_up("analytics@example.com", "secret1", "Stats Tester")
+			_stack.clear()
+			go("online")
+			await _wait(0.4)
+			chk.call("screen_view for Play Online", ev.call("screen_view").get("screen_name") == "online")
+			_screen.set("standin_after", Vector2(1.0, 1.5))
+			_screen.call("_search")
+			var w := 0.0
+			while w < 20.0 and not (_screen is MenuScreens.OnlineScreen and bool(_screen.get("_readying"))):
+				srv.now = Time.get_ticks_msec() / 1000.0
+				await _wait(0.1)
+				w += 0.1
+			chk.call("matchmaking_start, then matchmaking_result matched / bot with the wait", Analytics.count("matchmaking_start") >= 1
+				and ev.call("matchmaking_result").get("outcome") == "matched" and ev.call("matchmaking_result").get("opponent") == "bot", str(ev.call("matchmaking_result")))
+			chk.call("lobby_joined bot", ev.call("lobby_joined").get("opponent") == "bot")
+			if _screen is MenuScreens.OnlineScreen:
+				_screen.set("_opp_ready", true)
+				(_screen.find_child("ReadyButton", true, false) as Button).pressed.emit()
+			await _wait(1.5)
+			chk.call("both ready: lobby_left ready", ev.call("lobby_left").get("reason") == "ready", str(ev.call("lobby_left")))
+			ms = ev.call("match_start")
+			chk.call("the stand-in match: match_start online / bot", ms.get("mode") == "online" and ms.get("opponent") == "bot", str(ms))
+			quit_to("menu")
+			await _wait(0.4)
+			chk.call("leaving it: match_quit online", ev.call("match_quit").get("mode") == "online")
+			# --- the search given up
+			go("online")
+			await _wait(0.4)
+			_screen.set("standin_after", Vector2(50.0, 55.0))
+			_screen.call("_search")
+			await _wait(1.0)
+			_screen.call("_cancel")
+			await _wait(0.2)
+			chk.call("Cancel: matchmaking_result cancelled", ev.call("matchmaking_result").get("outcome") == "cancelled")
+			# --- AR: the table put down, AR given up, the camera refused
+			Analytics.ar_placing()
+			stage.place_table()
+			chk.call("ar_placement success", ev.call("ar_placement").get("success") == 1)
+			Analytics.ar_placing()
+			Analytics.ar_placement(false, "back")
+			chk.call("ar_placement given up", ev.call("ar_placement").get("success") == 0 and ev.call("ar_placement").get("placement") == "back")
+			stage.call("_block_ar", "permission")
+			chk.call("camera refused: camera_permission_result denied, ar_mode_set off / camera_denied", ev.call("camera_permission_result").get("result") == "denied"
+				and ev.call("ar_mode_set").get("reason") == "camera_denied")
+			stage.set_mode(Stage.Mode.STUDIO)
+			# --- rewarded adverts (stand-ins)
+			Game.set_s("ad_standins", true)
+			var ads_done := [0]
+			Game.set_s("ad_sample", false)
+			Ads.show("xp_chest", func(): ads_done[0] += 1)
+			await _wait(3.6)       # (a stand-in can't be closed for 3 s, like a real advert)
+			for b in Ads.find_children("*", "Button", true, false):
+				if (b as Button).text.begins_with(L.t("Continue")) and not (b as Button).disabled:
+					(b as Button).pressed.emit()
+			await _wait(0.3)
+			Game.set_s("ad_standins", false)
+			var rc: Dictionary = ev.call("rewarded_completed")
+			chk.call("a rewarded advert watched: rewarded_completed xp_chest, marked as a sample", ads_done[0] == 1 and rc.get("placement") == "xp_chest" and rc.get("sample") == 1, str(rc))
+			Net.fake = null
+			Game.progress = keep_pr
+			Game.set_s("analytics_consent", keep_consent)
+			Analytics.test_region = ""
+			_stack.clear()
+			go("menu")
+			var ok := res.filter(func(r): return r[1]).size()
+			for r in res:
+				print("  %s %s" % ["ok  " if r[1] else "FAIL", r[0]])
+			print("ANALYTICS %s (%d/%d)" % ["PASS" if ok == res.size() else "FAIL", ok, res.size()])
 		"readyup":
 			# 24 Nov 2026 (Randy): the stand-in comes after 45-60 s of searching; a ready-up between finding an opponent
 			# and the match: a green gradient Ready button with a light green outline, "Waiting for opponent to be ready
@@ -5560,6 +5881,8 @@ func _tour_step(dir: String, s: String) -> void:
 			await _perf_tour(dir)
 		"store":
 			await _store_shots(dir)
+		"combos":
+			await _store_combos(dir)
 		"placeturn":
 			# Randy, 18 Nov: "the player should be able to rotate and scale the table size before placing it" (simulated
 			# ARCore): the turn arrows, the size slider and two-finger twist / pinch change the table being placed, and

@@ -28,6 +28,15 @@ def esc(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+
+# 27 Nov 2026: Firebase (Analytics + Crashlytics, linked by ci.sh): collection OFF until the game's Analytics autoload
+# turns it on (the player's choice), no IDFV, no ad personalisation, no ad network attribution, no automatic screen events
+FIREBASE_PLIST = "".join("<key>%s</key><false/>" % k for k in (
+    "FIREBASE_ANALYTICS_COLLECTION_ENABLED", "FirebaseCrashlyticsCollectionEnabled",
+    "GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS", "GOOGLE_ANALYTICS_IDFV_COLLECTION_ENABLED",
+    "GOOGLE_ANALYTICS_REGISTRATION_WITH_AD_NETWORK_ENABLED", "FirebaseAutomaticScreenReportingEnabled"))
+
+
 def main():
     project = open(os.path.join(ROOT, "project.godot"), encoding="utf-8").read()
     version = re.search(r'^config/version="([^"]+)"', project, re.M).group(1)
@@ -85,7 +94,7 @@ application/bundle_identifier="com.emeraldvortexgames.emeraldbreak"
 application/signature=""
 application/short_version="{version}"
 application/version="{code}"
-application/additional_plist_content=""
+application/additional_plist_content="{FIREBASE_PLIST}"
 application/icon_interpolation=4
 icons/icon_1024x1024="res://assets/app_icon/icon_1024.png"
 icons/app_store_1024x1024="res://assets/app_icon/icon_1024.png"
