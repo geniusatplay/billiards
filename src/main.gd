@@ -1238,6 +1238,20 @@ func _store_shots(dir: String) -> void:
 	Game.set_s("control_scheme", "pro_dial")     # (the only cue control players have)
 	Game.set_s("surface", "floor")
 	Game.progress_changed.emit()
+	# (26 Nov 2026, evening) Randy: "the images dont show the updated breaks". Racks a and b were made before the
+	# 17 Nov break fix. --laycands=yaw,yaw,... breaks the rack once per aim with today's physics and writes every
+	# result to <dir>/lay_cands.json (no pictures), so the best-spread tables can be picked into the --lays file.
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--laycands="):
+			var cands := {}
+			for ys in a.substr(11).split(","):
+				var lay := await _store_break_layout(float(ys))
+				cands[ys] = _store_lay_to(lay)
+				print("STORE laycand %s: %d balls on, cue ball %s" % [ys, lay.size(), "on" if lay.has(0) else "POTTED"])
+			var cf := FileAccess.open(dir.path_join("lay_cands.json"), FileAccess.WRITE)
+			cf.store_string(JSON.stringify(cands))
+			cf.close()
+			only = ["none"]
 	# two real breaks give the mid-game tables
 	var lay_a := {}
 	var lay_b := {}
@@ -1546,11 +1560,11 @@ func _store_one(dir: String, id: String, lay_a: Dictionary, lay_b: Dictionary) -
 			_store_gear("skyline", "emerald", "cue_emerald_classic", "balls")
 			_end_match()
 			start_match({"mode": "practice"})
-			await _wait(1.0)
+			# (26 Nov 2026) the break now starts by placing the cue ball (Round 38): the tour confirms it, which turns
+			# the view to the aim view, so the camera is set after the stroke, as the action pictures' break does
+			await _wait(2.5)
 			hud.visible = false
 			var foot := Rack.foot_spot(game.sim)
-			_store_cam(Vector3(foot.x + 0.05, 0.02, foot.y), 0.95, 13.0, 0.25)
-			await _wait(1.5)
 			var start_pos := {}
 			for i in game.sim.n:
 				start_pos[i] = game.sim.pos[i]
@@ -1561,6 +1575,8 @@ func _store_one(dir: String, id: String, lay_a: Dictionary, lay_b: Dictionary) -
 					var parts := a.substr(11).split(",")
 					fz = [int(parts[0]), float(parts[1])]
 			game.fire(0.0, 0.95, Vector2.ZERO, 0.0)
+			_store_cam(Vector3(foot.x + 0.05, 0.02, foot.y), 0.95, 13.0, 0.25)
+			hud.visible = false
 			var t0 := Time.get_ticks_msec()
 			while Time.get_ticks_msec() - t0 < 60000:
 				await get_tree().physics_frame
