@@ -167,7 +167,12 @@ step_ipa() {
 	otool -L "$app/EmeraldBreak" | grep -E "ARKit|AVFoundation|CoreVideo" || { echo "ARKit is not linked into the app"; exit 1; }
 	if [ -d EmeraldBreak.xcworkspace ]; then
 		test -f "$app/GoogleService-Info.plist" || { echo "GoogleService-Info.plist is not in the app"; exit 1; }
-		nm "$app/EmeraldBreak" 2>/dev/null | grep -q "_OBJC_CLASS_\$_FIRApp" || { echo "Firebase (FIRApp) is not linked into the app"; exit 1; }
+		# (a release build strips the symbols, so look for Firebase's own class names - kept for the Objective-C runtime -
+		# and only ones the plugin never names itself)
+		local fbn
+		fbn=$(strings -a "$app/EmeraldBreak" | grep -cxE "FIROptions|FIRInstallations|FIRCLSFileManager" || true)
+		echo "Firebase class names in the app: $fbn of 3"
+		[ "$fbn" -ge 2 ] || { echo "Firebase is not linked into the app"; exit 1; }
 		echo "Firebase: linked, GoogleService-Info.plist bundled, collection off until the player's choice:"
 		plutil -extract FIREBASE_ANALYTICS_COLLECTION_ENABLED raw "$app/Info.plist" || true
 	fi

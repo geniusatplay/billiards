@@ -1422,8 +1422,11 @@ func _store_combos(dir: String) -> void:
 	var lay_path := ""
 	var resume := false
 	var sweep := false
+	var pairs: Array = []      # --pairs=scene__table,...: exactly these (the picks from the gallery), in this order
 	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--scenes="):
+		if a.begins_with("--pairs="):
+			pairs = Array(a.substr(8).split(","))
+		elif a.begins_with("--scenes="):
 			scenes = Array(a.substr(9).split(","))
 		elif a.begins_with("--tables="):
 			tables = Array(a.substr(9).split(","))
@@ -1449,31 +1452,42 @@ func _store_combos(dir: String) -> void:
 		lay = await _store_break_layout(0.0)
 	var made := 0
 	var t_all := Time.get_ticks_msec()
-	for sc in scenes:
+	var todo: Array = []
+	if not pairs.is_empty():
+		for p in pairs:
+			var two := str(p).split("__")
+			if two.size() == 2:
+				todo.append([two[0], two[1]])
+	else:
+		for sc in scenes:
+			for tb in (tables.slice(0, 1) if sweep else tables):
+				todo.append([sc, tb])
+	for st in todo:
+		var sc: String = st[0]
+		var tb: String = st[1]
 		var cam: Array = COMBO_CAM.get(sc, [0.785, 18.0, 2.5, -0.1])
-		for tb in (tables.slice(0, 1) if sweep else tables):
-			var name := "combo_%s__%s" % [sc, tb]
-			if resume and FileAccess.file_exists(dir.path_join(name + ".png")):
-				continue
-			var t0 := Time.get_ticks_msec()
-			_store_gear(sc, tb, cue, balls)
-			await _store_versus(lay)
-			hud.visible = false
-			var yaws: Array = [float(cam[0])]
-			if sweep:
-				yaws = []
-				for k in 8:
-					yaws.append(-PI + k * PI / 4.0)
-			for y in yaws:
-				_store_cam(Vector3(0, float(cam[3]), 0), float(cam[2]), float(cam[1]), float(y))
-				await _wait(1.2 if sweep else 2.5)
-				stage.call("_snap_orbit")
-				await _wait(0.3)
-				await _shot(dir, ("sweep_%s_%+.2f" % [sc, y]) if sweep else name)
-			hud.visible = true
-			stage.reset_manual()
-			made += 1
-			print("COMBO %s %s %.1f s" % [sc, tb, (Time.get_ticks_msec() - t0) / 1000.0])
+		var name := "combo_%s__%s" % [sc, tb]
+		if resume and FileAccess.file_exists(dir.path_join(name + ".png")):
+			continue
+		var t0 := Time.get_ticks_msec()
+		_store_gear(sc, tb, cue, balls)
+		await _store_versus(lay)
+		hud.visible = false
+		var yaws: Array = [float(cam[0])]
+		if sweep:
+			yaws = []
+			for k in 8:
+				yaws.append(-PI + k * PI / 4.0)
+		for y in yaws:
+			_store_cam(Vector3(0, float(cam[3]), 0), float(cam[2]), float(cam[1]), float(y))
+			await _wait(1.2 if sweep else 2.5)
+			stage.call("_snap_orbit")
+			await _wait(0.3)
+			await _shot(dir, ("sweep_%s_%+.2f" % [sc, y]) if sweep else name)
+		hud.visible = true
+		stage.reset_manual()
+		made += 1
+		print("COMBO %s %s %.1f s" % [sc, tb, (Time.get_ticks_msec() - t0) / 1000.0])
 	_store_end(keep)
 	print("COMBOS done: %d pictures in %.0f s" % [made, (Time.get_ticks_msec() - t_all) / 1000.0])
 
